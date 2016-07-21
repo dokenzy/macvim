@@ -3449,7 +3449,7 @@ static void socketReadCallback(CFSocketRef s,
                                       &socketReadCallback,
                                       &ctx);
     CFOptionFlags opt = CFSocketGetSocketFlags(socket);
-    opt &= ~kCFSocketCloseOnInvalidate;
+    opt &= ~(kCFSocketCloseOnInvalidate|kCFSocketLeaveErrors);
     CFSocketSetSocketFlags(socket, opt);
     runLoopSource = CFSocketCreateRunLoopSource(NULL,
                                                 socket,
@@ -3463,7 +3463,14 @@ static void socketReadCallback(CFSocketRef s,
 
 - (void)read
 {
-    channel_read(channel, part, "MMChannel_read");
+    int fd = channel->ch_part[part].ch_fd;
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(fd, &fds);
+    struct timeval t;
+    memset(&t, 0, sizeof(t));
+    if (select(FD_SETSIZE, &fds, NULL, NULL, &t) > 0)
+        channel_read(channel, part, "MMChannel_read");
 }
 
 @end
