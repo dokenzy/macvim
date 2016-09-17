@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4:
+/* vi:set ts=8 sts=4 sw=4 noet:
  *
  * VIM - Vi IMproved	by Bram Moolenaar
  *
@@ -209,7 +209,7 @@ newwindow:
 
 /* cursor to preview window */
     case 'P':
-		for (wp = firstwin; wp != NULL; wp = wp->w_next)
+		FOR_ALL_WINDOWS(wp)
 		    if (wp->w_p_pvw)
 			break;
 		if (wp == NULL)
@@ -1363,7 +1363,7 @@ win_init_some(win_T *newp, win_T *oldp)
 
 #if defined(FEAT_WINDOWS) || defined(PROTO)
 /*
- * Check if "win" is a pointer to an existing window.
+ * Check if "win" is a pointer to an existing window in the current tab page.
  */
     int
 win_valid(win_T *win)
@@ -1372,9 +1372,31 @@ win_valid(win_T *win)
 
     if (win == NULL)
 	return FALSE;
-    for (wp = firstwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_WINDOWS(wp)
 	if (wp == win)
 	    return TRUE;
+    return FALSE;
+}
+
+/*
+ * Check if "win" is a pointer to an existing window in any tab page.
+ */
+    int
+win_valid_any_tab(win_T *win)
+{
+    win_T	*wp;
+    tabpage_T	*tp;
+
+    if (win == NULL)
+	return FALSE;
+    FOR_ALL_TABPAGES(tp)
+    {
+	FOR_ALL_WINDOWS_IN_TAB(tp, wp)
+	{
+	    if (wp == win)
+		return TRUE;
+	}
+    }
     return FALSE;
 }
 
@@ -1387,7 +1409,7 @@ win_count(void)
     win_T	*wp;
     int		count = 0;
 
-    for (wp = firstwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_WINDOWS(wp)
 	++count;
     return count;
 }
@@ -2110,7 +2132,7 @@ close_windows(
     {
 	if (wp->w_buffer == buf && (!keep_curwin || wp != curwin)
 #ifdef FEAT_AUTOCMD
-		&& !(wp->w_closing || wp->w_buffer->b_closing)
+		&& !(wp->w_closing || wp->w_buffer->b_locked > 0)
 #endif
 		)
 	{
@@ -2131,7 +2153,7 @@ close_windows(
 	    for (wp = tp->tp_firstwin; wp != NULL; wp = wp->w_next)
 		if (wp->w_buffer == buf
 #ifdef FEAT_AUTOCMD
-		    && !(wp->w_closing || wp->w_buffer->b_closing)
+		    && !(wp->w_closing || wp->w_buffer->b_locked > 0)
 #endif
 		    )
 		{
@@ -2270,7 +2292,8 @@ win_close(win_T *win, int free_buf)
     }
 
 #ifdef FEAT_AUTOCMD
-    if (win->w_closing || (win->w_buffer != NULL && win->w_buffer->b_closing))
+    if (win->w_closing || (win->w_buffer != NULL
+					       && win->w_buffer->b_locked > 0))
 	return FAIL; /* window is already being closed */
     if (win == aucmd_win)
     {
@@ -2362,7 +2385,7 @@ win_close(win_T *win, int free_buf)
 #endif
 	close_buffer(win, win->w_buffer, free_buf ? DOBUF_UNLOAD : 0, TRUE);
 #ifdef FEAT_AUTOCMD
-	if (win_valid(win))
+	if (win_valid_any_tab(win))
 	    win->w_closing = FALSE;
 #endif
 	/* Make sure curbuf is valid. It can become invalid if 'bufhidden' is
@@ -2382,9 +2405,18 @@ win_close(win_T *win, int free_buf)
 	getout(0);
     }
 
-    /* Autocommands may have closed the window already, or closed the only
-     * other window or moved to another tab page. */
-    else if (!win_valid(win) || last_window() || curtab != prev_curtab
+    /* Autocommands may have moved to another tab page. */
+    if (curtab != prev_curtab && win_valid_any_tab(win)
+						      && win->w_buffer == NULL)
+    {
+	/* Need to close the window anyway, since the buffer is NULL. */
+	win_close_othertab(win, FALSE, prev_curtab);
+	return FAIL;
+    }
+
+    /* Autocommands may have closed the window already or closed the only
+     * other window. */
+    if (!win_valid(win) || last_window()
 	    || close_last_window_tabpage(win, free_buf, prev_curtab))
 	return FAIL;
 
@@ -2475,12 +2507,16 @@ win_close_othertab(win_T *win, int free_buf, tabpage_T *tp)
     int		free_tp = FALSE;
 
 #ifdef FEAT_AUTOCMD
-    if (win->w_closing || win->w_buffer->b_closing)
+    /* Get here with win->w_buffer == NULL when win_close() detects the tab
+     * page changed. */
+    if (win->w_closing || (win->w_buffer != NULL
+					       && win->w_buffer->b_locked > 0))
 	return; /* window is already being closed */
 #endif
 
-    /* Close the link to the buffer. */
-    close_buffer(win, win->w_buffer, free_buf ? DOBUF_UNLOAD : 0, FALSE);
+    if (win->w_buffer != NULL)
+	/* Close the link to the buffer. */
+	close_buffer(win, win->w_buffer, free_buf ? DOBUF_UNLOAD : 0, FALSE);
 
     /* Careful: Autocommands may have closed the tab page or made it the
      * current tab page.  */
@@ -3717,7 +3753,7 @@ valid_tabpage(tabpage_T *tpc)
 {
     tabpage_T	*tp;
 
-    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
+    FOR_ALL_TABPAGES(tp)
 	if (tp == tpc)
 	    return TRUE;
     return FALSE;
@@ -3883,12 +3919,7 @@ goto_tabpage(int n)
     if (text_locked())
     {
 	/* Not allowed when editing the command line. */
-#ifdef FEAT_CMDWIN
-	if (cmdwin_type != 0)
-	    EMSG(_(e_cmdwin));
-	else
-#endif
-	    EMSG(_(e_secure));
+	text_locked_msg();
 	return;
     }
 
@@ -4017,7 +4048,7 @@ tabpage_move(int nr)
 	first_tabpage = curtab->tp_next;
     else
     {
-	for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
+	FOR_ALL_TABPAGES(tp)
 	    if (tp->tp_next == curtab)
 		break;
 	if (tp == NULL)	/* "cannot happen" */
@@ -4096,7 +4127,7 @@ win_find_nr(int winnr)
     win_T	*wp;
 
 # ifdef FEAT_WINDOWS
-    for (wp = firstwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_WINDOWS(wp)
 	if (--winnr == 0)
 	    break;
     return wp;
@@ -4117,9 +4148,7 @@ win_find_tabpage(win_T *win)
     win_T	*wp;
     tabpage_T	*tp;
 
-    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
-	for (wp = (tp == curtab ? firstwin : tp->tp_firstwin);
-						  wp != NULL; wp = wp->w_next)
+    FOR_ALL_TAB_WINDOWS(tp, wp)
 	    if (wp == win)
 		return tp;
     return NULL;
@@ -4409,7 +4438,7 @@ buf_jump_open_win(buf_T *buf)
 	wp = curwin;
 # ifdef FEAT_WINDOWS
     else
-	for (wp = firstwin; wp != NULL; wp = wp->w_next)
+	FOR_ALL_WINDOWS(wp)
 	    if (wp->w_buffer == buf)
 		break;
     if (wp != NULL)
@@ -4433,7 +4462,7 @@ buf_jump_open_tab(buf_T *buf)
     if (wp != NULL)
 	return wp;
 
-    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
+    FOR_ALL_TABPAGES(tp)
 	if (tp != curtab)
 	{
 	    for (wp = tp->tp_firstwin; wp != NULL; wp = wp->w_next)
@@ -4612,7 +4641,7 @@ win_free(
 
 	if (prevwin == wp)
 	    prevwin = NULL;
-	for (ttp = first_tabpage; ttp != NULL; ttp = ttp->tp_next)
+	FOR_ALL_TABPAGES(ttp)
 	    if (ttp->tp_prevwin == wp)
 		ttp->tp_prevwin = NULL;
     }
@@ -4625,7 +4654,7 @@ win_free(
 
     /* Remove the window from the b_wininfo lists, it may happen that the
      * freed memory is re-used for another window. */
-    for (buf = firstbuf; buf != NULL; buf = buf->b_next)
+    FOR_ALL_BUFFERS(buf)
 	for (wip = buf->b_wininfo; wip != NULL; wip = wip->wi_next)
 	    if (wip->wi_win == wp)
 		wip->wi_win = NULL;
@@ -4868,7 +4897,7 @@ win_size_save(garray_T *gap)
 
     ga_init2(gap, (int)sizeof(int), 1);
     if (ga_grow(gap, win_count() * 2) == OK)
-	for (wp = firstwin; wp != NULL; wp = wp->w_next)
+	FOR_ALL_WINDOWS(wp)
 	{
 	    ((int *)gap->ga_data)[gap->ga_len++] =
 					       wp->w_width + wp->w_vsep_width;
@@ -4893,7 +4922,7 @@ win_size_restore(garray_T *gap)
 	for (j = 0; j < 2; ++j)
 	{
 	    i = 0;
-	    for (wp = firstwin; wp != NULL; wp = wp->w_next)
+	    FOR_ALL_WINDOWS(wp)
 	    {
 		frame_setwidth(wp->w_frame, ((int *)gap->ga_data)[i++]);
 		win_setheight_win(((int *)gap->ga_data)[i++], wp);
@@ -5389,7 +5418,7 @@ win_setminheight(void)
     {
 	/* TODO: handle vertical splits */
 	room = -p_wh;
-	for (wp = firstwin; wp != NULL; wp = wp->w_next)
+	FOR_ALL_WINDOWS(wp)
 	    room += wp->w_height - p_wmh;
 	if (room >= 0)
 	    break;
@@ -5659,8 +5688,6 @@ set_fraction(win_T *wp)
     void
 win_new_height(win_T *wp, int height)
 {
-    linenr_T	lnum;
-    int		sline, line_size;
     int		prev_height = wp->w_height;
 
     /* Don't want a negative height.  Happens when splitting a tiny window.
@@ -5685,6 +5712,16 @@ win_new_height(win_T *wp, int height)
 
     wp->w_height = height;
     wp->w_skipcol = 0;
+
+    scroll_to_fraction(wp, prev_height);
+}
+
+    void
+scroll_to_fraction(win_T *wp, int prev_height)
+{
+    linenr_T	lnum;
+    int		sline, line_size;
+    int		height = wp->w_height;
 
     /* Don't change w_topline when height is zero.  Don't set w_topline when
      * 'scrollbind' is set and this isn't the current window. */
@@ -5812,6 +5849,9 @@ win_new_height(win_T *wp, int height)
     void
 win_new_width(win_T *wp, int width)
 {
+#ifdef FEAT_GUI_MACVIM
+    int		resized = wp->w_width != width;
+#endif
     wp->w_width = width;
     wp->w_lines_valid = 0;
     changed_line_abv_curs_win(wp);
@@ -5823,7 +5863,7 @@ win_new_width(win_T *wp, int width)
     }
 #ifdef FEAT_GUI_MACVIM
     /* The view may have moved, so clear all or display may get corrupted. */
-    redraw_win_later(wp, gui.in_use ? CLEAR : NOT_VALID);
+    redraw_win_later(wp, resized && gui.in_use ? CLEAR : NOT_VALID);
 #else
     redraw_win_later(wp, NOT_VALID);
 #endif
@@ -6354,7 +6394,7 @@ min_rows(void)
 
 #ifdef FEAT_WINDOWS
     total = 0;
-    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
+    FOR_ALL_TABPAGES(tp)
     {
 	n = frame_minheight(tp->tp_topframe, NULL);
 	if (total < n)
@@ -6384,7 +6424,7 @@ only_one_window(void)
     if (first_tabpage->tp_next != NULL)
 	return FALSE;
 
-    for (wp = firstwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_WINDOWS(wp)
 	if (wp->w_buffer != NULL
 		&& (!((wp->w_buffer->b_help && !curbuf->b_help)
 # ifdef FEAT_QUICKFIX
@@ -6741,7 +6781,7 @@ match_add(
 	return -1;
     if (id < -1 || id == 0)
     {
-	EMSGN("E799: Invalid ID: %ld (must be greater than or equal to 1)", id);
+	EMSGN(_("E799: Invalid ID: %ld (must be greater than or equal to 1)"), id);
 	return -1;
     }
     if (id != -1)
@@ -6751,7 +6791,7 @@ match_add(
 	{
 	    if (cur->id == id)
 	    {
-		EMSGN("E801: ID already taken: %ld", id);
+		EMSGN(_("E801: ID already taken: %ld"), id);
 		return -1;
 	    }
 	    cur = cur->next;
@@ -6928,7 +6968,7 @@ match_delete(win_T *wp, int id, int perr)
     if (id < 1)
     {
 	if (perr == TRUE)
-	    EMSGN("E802: Invalid ID: %ld (must be greater than or equal to 1)",
+	    EMSGN(_("E802: Invalid ID: %ld (must be greater than or equal to 1)"),
 									  id);
 	return -1;
     }
@@ -6940,7 +6980,7 @@ match_delete(win_T *wp, int id, int perr)
     if (cur == NULL)
     {
 	if (perr == TRUE)
-	    EMSGN("E803: ID not found: %ld", id);
+	    EMSGN(_("E803: ID not found: %ld"), id);
 	return -1;
     }
     if (cur == prev)
@@ -7101,7 +7141,7 @@ win_getid(typval_T *argvars)
 	    tabpage_T	*tp;
 	    int		tabnr = get_tv_number(&argvars[1]);
 
-	    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
+	    FOR_ALL_TABPAGES(tp)
 		if (--tabnr == 0)
 		    break;
 	    if (tp == NULL)
@@ -7122,9 +7162,7 @@ win_gotoid(typval_T *argvars)
     tabpage_T   *tp;
     int		id = get_tv_number(&argvars[0]);
 
-    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
-	for (wp = tp == curtab ? firstwin : tp->tp_firstwin;
-						  wp != NULL; wp = wp->w_next)
+    FOR_ALL_TAB_WINDOWS(tp, wp)
 	    if (wp->w_id == id)
 	    {
 		goto_tabpage_win(tp, wp);
@@ -7142,10 +7180,9 @@ win_id2tabwin(typval_T *argvars, list_T *list)
     int		tabnr = 1;
     int		id = get_tv_number(&argvars[0]);
 
-    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
+    FOR_ALL_TABPAGES(tp)
     {
-	for (wp = tp == curtab ? firstwin : tp->tp_firstwin;
-						  wp != NULL; wp = wp->w_next)
+	FOR_ALL_WINDOWS_IN_TAB(tp, wp)
 	{
 	    if (wp->w_id == id)
 	    {
@@ -7162,6 +7199,20 @@ win_id2tabwin(typval_T *argvars, list_T *list)
     list_append_number(list, 0);
 }
 
+    win_T *
+win_id2wp(typval_T *argvars)
+{
+    win_T	*wp;
+    tabpage_T   *tp;
+    int		id = get_tv_number(&argvars[0]);
+
+    FOR_ALL_TAB_WINDOWS(tp, wp)
+	if (wp->w_id == id)
+	    return wp;
+
+    return NULL;
+}
+
     int
 win_id2win(typval_T *argvars)
 {
@@ -7169,7 +7220,7 @@ win_id2win(typval_T *argvars)
     int	    nr = 1;
     int	    id = get_tv_number(&argvars[0]);
 
-    for (wp = firstwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_WINDOWS(wp)
     {
 	if (wp->w_id == id)
 	    return nr;
@@ -7185,9 +7236,7 @@ win_findbuf(typval_T *argvars, list_T *list)
     tabpage_T   *tp;
     int		bufnr = get_tv_number(&argvars[0]);
 
-    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next)
-	for (wp = tp == curtab ? firstwin : tp->tp_firstwin;
-						  wp != NULL; wp = wp->w_next)
+    FOR_ALL_TAB_WINDOWS(tp, wp)
 	    if (wp->w_buffer->b_fnum == bufnr)
 		list_append_number(list, wp->w_id);
 }

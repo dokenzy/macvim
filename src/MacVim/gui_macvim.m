@@ -1597,7 +1597,7 @@ gui_mch_get_color(char_u *name)
 /*
  * Return the RGB value of a pixel as long.
  */
-    long_u
+    guicolor_T
 gui_mch_get_rgb(guicolor_T pixel)
 {
     // This is only implemented so that vim can guess the correct value for
@@ -1817,6 +1817,11 @@ gui_macvim_set_antialias(int antialias)
 gui_macvim_set_ligatures(int ligatures)
 {
     [[MMBackend sharedInstance] setLigatures:ligatures];
+}
+    void
+gui_macvim_set_thinstrokes(int thinStrokes)
+{
+    [[MMBackend sharedInstance] setThinStrokes:thinStrokes];
 }
 
     void
@@ -2260,13 +2265,24 @@ static int vimModMaskToEventModifierFlags(int mods)
     void *
 gui_macvim_add_channel(channel_T *channel, int part)
 {
-    return [[MMBackend sharedInstance] addChannel:channel part:part];
+    dispatch_source_t s =
+        dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
+                               channel->ch_part[part].ch_fd,
+                               0,
+                               dispatch_get_main_queue());
+    dispatch_source_set_event_handler(s, ^{
+        channel_read(channel, part, "gui_macvim_add_channel");
+    });
+    dispatch_resume(s);
+    return s;
 }
 
     void
 gui_macvim_remove_channel(void *cookie)
 {
-    [[MMBackend sharedInstance] removeChannel:cookie];
+    dispatch_source_t s = (dispatch_source_t)cookie;
+    dispatch_source_cancel(s);
+    dispatch_release(s);
 }
 
 

@@ -335,9 +335,13 @@ CClink = $(CC)
 
 # Uncomment one of these lines if you have that GUI but don't want to use it.
 # The automatic check will use another one that can be found.
-# Gnome is disabled by default, it may cause trouble.
+# Gnome is disabled by default, because it may cause trouble.
+#
+# When both GTK+ 2 and GTK+ 3 are possible then GTK+ 2 will be selected.
+# To use GTK+ 3 instead use --enable-gui=gtk3 (see below).
 #CONF_OPT_GUI = --disable-gtk2-check
 #CONF_OPT_GUI = --enable-gnome2-check
+#CONF_OPT_GUI = --disable-gtk3-check
 #CONF_OPT_GUI = --disable-motif-check
 #CONF_OPT_GUI = --disable-athena-check
 #CONF_OPT_GUI = --disable-nextaw-check
@@ -348,18 +352,24 @@ CClink = $(CC)
 #
 # GTK versions that are known not to work 100% are rejected.
 # Use "--disable-gtktest" to accept them anyway.
-# Only GTK 2 is supported, for GTK 1 use Vim 7.2.
+# For GTK 1 use Vim 7.2.
 #
 # GNOME means GTK with Gnome support.  If using GTK and --enable-gnome-check
 # is used then GNOME will automatically be used if it is found.  If you have
 # GNOME, but do not want to use it (e.g., want a GTK-only version), then use
 # --enable-gui=gtk or leave out --enable-gnome-check.
 #
+# GNOME makes sense only for GTK+ 2.  Avoid use of --enable-gnome-check with
+# GTK+ 3 build, as the functionality of GNOME is already incooperated into
+# GTK+ 3.
+#
 # If the selected GUI isn't found, the GUI is disabled automatically
 #CONF_OPT_GUI = --enable-gui=gtk2
 #CONF_OPT_GUI = --enable-gui=gtk2 --disable-gtktest
 #CONF_OPT_GUI = --enable-gui=gnome2
 #CONF_OPT_GUI = --enable-gui=gnome2 --disable-gtktest
+#CONF_OPT_GUI = --enable-gui=gtk3
+#CONF_OPT_GUI = --enable-gui=gtk3 --disable-gtktest
 #CONF_OPT_GUI = --enable-gui=motif
 #CONF_OPT_GUI = --enable-gui=motif --with-motif-lib="-static -lXm -shared"
 #CONF_OPT_GUI = --enable-gui=athena
@@ -367,6 +377,9 @@ CClink = $(CC)
 
 # Carbon GUI for Mac OS X
 #CONF_OPT_GUI = --enable-gui=carbon
+
+# Uncomment this line to run an individual test with gvim.
+#GUI_TESTARG = GUI_FLAG=-g 
 
 # DARWIN - detecting Mac OS X
 # Uncomment this line when you want to compile a Unix version of Vim on
@@ -399,6 +412,7 @@ CClink = $(CC)
 
 # MZSCHEME
 # Uncomment this when you want to include the MzScheme interface.
+# NOTE: does not work well together with valgrind.
 #CONF_OPT_MZSCHEME = --enable-mzschemeinterp
 # PLT/mrscheme/drscheme Home dir; the PLTHOME environment variable also works
 #CONF_OPT_PLTHOME  = --with-plthome=/usr/local/plt
@@ -995,8 +1009,8 @@ TOOLS = xxd/xxd$(EXEEXT)
 MAN1DIR = /man1
 
 ### Vim version (adjusted by a script)
-VIMMAJOR = 7
-VIMMINOR = 4
+VIMMAJOR = 8
+VIMMINOR = 0
 
 ### Location of Vim files (should not need to be changed, and  {{{1
 ### some things might not work when they are changed!)
@@ -1068,7 +1082,8 @@ SCRIPTLOC	= $(VIMRTLOC)
 ### the runtime directory is not below it.
 #VIMRUNTIMEDIR = $(VIMRTLOC)
 
-### Name of the evim file target.
+### Name of the defaults/evim/mswin file target.
+VIM_DEFAULTS_FILE = $(DESTDIR)$(SCRIPTLOC)/defaults.vim
 EVIM_FILE	= $(DESTDIR)$(SCRIPTLOC)/evim.vim
 MSWIN_FILE	= $(DESTDIR)$(SCRIPTLOC)/mswin.vim
 
@@ -2029,7 +2044,6 @@ test1 \
 	test_autoformat_join \
 	test_breakindent \
 	test_changelist \
-	test_charsearch \
 	test_close_count \
 	test_command_count \
 	test_comparators \
@@ -2041,28 +2055,20 @@ test1 \
 	test_listchars \
 	test_listlbr \
 	test_listlbr_utf8 \
-	test_mapping \
-	test_marks \
-	test_nested_function \
-	test_options \
 	test_search_mbyte \
-	test_signs \
-	test_tagcase \
-	test_textobjects \
 	test_utf8 \
 	test_wordcount \
-	test_writefile \
-	test2 test3 test4 test5 test6 test7 test8 test9 \
-	test11 test12 test13 test14 test15 test16 test17 test18 test19 \
+	test3 test4 test5 test6 test7 test8 test9 \
+	test11 test12 test14 test15 test17 test18 test19 \
 	test20 test21 test22 test23 test24 test25 test26 test27 test28 test29 \
 	test30 test31 test32 test33 test34 test36 test37 test38 test39 \
-	test40 test41 test42 test43 test44 test45 test46 test47 test48 test49 \
+	test40 test41 test42 test43 test44 test45 test48 test49 \
 	test50 test51 test52 test53 test54 test55 test56 test57 test58 test59 \
-	test60 test61 test62 test63 test64 test65 test66 test67 test68 test69 \
+	test60 test64 test65 test66 test67 test68 test69 \
 	test70 test71 test72 test73 test74 test75 test76 test77 test78 test79 \
-	test80 test81 test82 test83 test84 test85 test86 test87 test88 test89 \
+	test80 test82 test83 test84 test85 test86 test87 test88 test89 \
 	test90 test91 test92 test93 test94 test95 test97 test98 test99 \
-	test100 test101 test102 test103 test104 test107 test108:
+	test100 test101 test103 test104 test107 test108:
 	cd testdir; rm -f $@.out; $(MAKE) -f Makefile $@.out VIMPROG=../$(VIMTARGET) $(GUI_TESTARG) SCRIPTSOURCE=../$(SCRIPTSOURCE)
 
 # Run individual NEW style test, assuming that Vim was already compiled.
@@ -2072,12 +2078,16 @@ test_arglist \
 	test_autochdir \
 	test_autocmd \
 	test_backspace_opt \
+	test_bufwintabinfo \
 	test_cdo \
 	test_channel \
+	test_charsearch \
 	test_cmdline \
 	test_cscope \
 	test_cursor_func \
 	test_delete \
+	test_diffmode \
+	test_digraph \
 	test_ex_undo \
 	test_execute_func \
 	test_expand \
@@ -2087,15 +2097,22 @@ test_arglist \
 	test_farsi \
 	test_feedkeys \
 	test_file_perm \
+	test_filter_cmd \
 	test_filter_map \
+	test_fnameescape \
 	test_fnamemodify \
 	test_glob2regpat \
+	test_gf \
+	test_gn \
 	test_goto \
+	test_gui \
 	test_hardcopy \
 	test_help_tagjump \
 	test_history \
+	test_hlsearch \
 	test_increment \
 	test_increment_dbcs \
+	test_job_fails \
 	test_join \
 	test_json \
 	test_jumps \
@@ -2104,12 +2121,17 @@ test_arglist \
 	test_largefile \
 	test_lispwords \
 	test_man \
+	test_mapping \
+	test_marks \
+	test_match \
 	test_matchadd_conceal \
 	test_matchadd_conceal_utf8 \
-	test_matchstrpos \
 	test_menu \
 	test_messages \
+	test_nested_function \
 	test_netbeans \
+	test_normal \
+	test_options \
 	test_packadd \
 	test_partial \
 	test_perl \
@@ -2119,25 +2141,36 @@ test_arglist \
 	test_regexp_utf8 \
 	test_reltime \
 	test_ruby \
+	test_search \
 	test_searchpos \
 	test_set \
+	test_signs \
 	test_sort \
+	test_source_utf8 \
+	test_smartindent \
+	test_startup \
+	test_startup_utf8 \
 	test_stat \
 	test_statusline \
+	test_substitute \
 	test_syn_attr \
 	test_syntax \
 	test_tabline \
+	test_tabpage \
+	test_tagcase \
 	test_tagjump \
+	test_textobjects \
 	test_timers \
 	test_true_false \
-	test_undolevels \
-	test_usercommands \
+	test_undo \
 	test_unlet \
+	test_usercommands \
 	test_viminfo \
 	test_viml \
 	test_visual \
 	test_window_cmd \
 	test_window_id \
+	test_writefile \
 	test_alot_latin \
 	test_alot_utf8 \
 	test_alot:
@@ -2252,11 +2285,13 @@ installrtbase: $(HELPSOURCE)/vim.1 $(DEST_VIM) $(DEST_RT) \
 	chmod $(VIMSCRIPTMOD) $(SYS_SYNMENU_FILE)
 	$(INSTALL_DATA) $(SCRIPTSOURCE)/delmenu.vim $(SYS_DELMENU_FILE)
 	chmod $(VIMSCRIPTMOD) $(SYS_DELMENU_FILE)
-# install the evim file
-	$(INSTALL_DATA) $(SCRIPTSOURCE)/mswin.vim $(MSWIN_FILE)
-	chmod $(VIMSCRIPTMOD) $(MSWIN_FILE)
+# install the defaults/evim/mswin file
+	$(INSTALL_DATA) $(SCRIPTSOURCE)/defaults.vim $(VIM_DEFAULTS_FILE)
+	chmod $(VIMSCRIPTMOD) $(VIM_DEFAULTS_FILE)
 	$(INSTALL_DATA) $(SCRIPTSOURCE)/evim.vim $(EVIM_FILE)
 	chmod $(VIMSCRIPTMOD) $(EVIM_FILE)
+	$(INSTALL_DATA) $(SCRIPTSOURCE)/mswin.vim $(MSWIN_FILE)
+	chmod $(VIMSCRIPTMOD) $(MSWIN_FILE)
 # install the rgb.txt file
 	$(INSTALL_DATA) $(SCRIPTSOURCE)/rgb.txt $(SYS_RGB_FILE)
 	chmod $(VIMSCRIPTMOD) $(SYS_RGB_FILE)
@@ -2445,7 +2480,8 @@ install-languages: languages $(DEST_LANG) $(DEST_KMAP)
 	   chmod $(FILEMOD) $(DEST_KMAP)/README.txt $(DEST_KMAP)/*.vim; \
 	fi
 
-# install the icons for KDE, if the directory exists and the icon doesn't.
+# Install the icons for KDE, if the directory exists and the icon doesn't.
+# Always when $(DESTDIR) is not empty.
 ICON48PATH = $(DESTDIR)$(DATADIR)/icons/hicolor/48x48/apps
 ICON32PATH = $(DESTDIR)$(DATADIR)/icons/locolor/32x32/apps
 ICON16PATH = $(DESTDIR)$(DATADIR)/icons/locolor/16x16/apps
@@ -2453,6 +2489,11 @@ ICONTHEMEPATH = $(DATADIR)/icons/hicolor
 DESKTOPPATH = $(DESTDIR)$(DATADIR)/applications
 KDEPATH = $(HOME)/.kde/share/icons
 install-icons:
+	if test -n "$(DESTDIR)"; then \
+		$(SHELL) ./mkinstalldirs $(ICON48PATH) $(ICON32PATH) \
+		$(ICON16PATH) $(DESKTOPPATH); \
+	fi
+
 	if test -d $(ICON48PATH) -a -w $(ICON48PATH) \
 		-a ! -f $(ICON48PATH)/gvim.png; then \
 	   $(INSTALL_DATA) $(SCRIPTSOURCE)/vim48x48.png $(ICON48PATH)/gvim.png; \
@@ -2624,7 +2665,7 @@ uninstall_runtime:
 	-rm -f $(DEST_HELP)/*.??x $(DEST_HELP)/tags-??
 	-rm -f $(SYS_RGB_FILE)
 	-rm -f $(SYS_MENU_FILE) $(SYS_SYNMENU_FILE) $(SYS_DELMENU_FILE)
-	-rm -f $(SYS_BUGR_FILE) $(EVIM_FILE) $(MSWIN_FILE)
+	-rm -f $(SYS_BUGR_FILE) $(VIM_DEFAULTS_FILE) $(EVIM_FILE) $(MSWIN_FILE)
 	-rm -f $(DEST_SCRIPT)/gvimrc_example.vim $(DEST_SCRIPT)/vimrc_example.vim
 	-rm -f $(SYS_FILETYPE_FILE) $(SYS_FTOFF_FILE) $(SYS_SCRIPTS_FILE)
 	-rm -f $(SYS_INDOFF_FILE) $(SYS_INDENT_FILE)
@@ -2690,6 +2731,7 @@ shadow:	runtime pixmaps
 	mkdir $(SHADOWDIR)/testdir
 	cd $(SHADOWDIR)/testdir; ln -s ../../testdir/Makefile \
 				 ../../testdir/Make_all.mak \
+				 ../../testdir/README.txt \
 				 ../../testdir/*.in \
 				 ../../testdir/*.vim \
 				 ../../testdir/*.py \
@@ -3412,7 +3454,7 @@ objects/option.o: option.c vim.h auto/config.h feature.h os_unix.h auto/osdef.h 
 objects/os_unix.o: os_unix.c vim.h auto/config.h feature.h os_unix.h auto/osdef.h \
  ascii.h keymap.h term.h macros.h option.h structs.h regexp.h gui.h \
  gui_beval.h proto/gui_beval.pro alloc.h ex_cmds.h spell.h proto.h \
- globals.h farsi.h arabic.h os_unixx.h
+ globals.h farsi.h arabic.h if_mzsch.h os_unixx.h
 objects/pathdef.o: auto/pathdef.c vim.h auto/config.h feature.h os_unix.h \
  auto/osdef.h ascii.h keymap.h term.h macros.h option.h structs.h \
  regexp.h gui.h gui_beval.h proto/gui_beval.pro alloc.h ex_cmds.h spell.h \
@@ -3586,7 +3628,7 @@ objects/if_lua.o: if_lua.c vim.h auto/config.h feature.h os_unix.h auto/osdef.h 
 objects/if_mzsch.o: if_mzsch.c vim.h auto/config.h feature.h os_unix.h \
  auto/osdef.h ascii.h keymap.h term.h macros.h option.h structs.h \
  regexp.h gui.h gui_beval.h proto/gui_beval.pro alloc.h ex_cmds.h spell.h \
- proto.h globals.h farsi.h arabic.h if_mzsch.h
+ proto.h globals.h farsi.h arabic.h if_mzsch.h mzscheme_base.c
 objects/if_perl.o: auto/if_perl.c vim.h auto/config.h feature.h os_unix.h \
  auto/osdef.h ascii.h keymap.h term.h macros.h option.h structs.h \
  regexp.h gui.h gui_beval.h proto/gui_beval.pro alloc.h ex_cmds.h spell.h \
