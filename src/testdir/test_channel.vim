@@ -1232,6 +1232,32 @@ func Test_out_cb_lambda()
   endtry
 endfunc
 
+func Test_close_and_exit_cb()
+  if !has('job')
+    return
+  endif
+  call ch_log('Test_close_and_exit_cb')
+
+  let dict = {'ret': {}}
+  func dict.close_cb(ch) dict
+    let self.ret['close_cb'] = job_status(ch_getjob(a:ch))
+  endfunc
+  func dict.exit_cb(job, status) dict
+    let self.ret['exit_cb'] = job_status(a:job)
+  endfunc
+
+  let g:job = job_start('echo', {
+        \ 'close_cb': dict.close_cb,
+        \ 'exit_cb': dict.exit_cb,
+        \ })
+  call assert_equal('run', job_status(g:job))
+  unlet g:job
+  call WaitFor('len(dict.ret) >= 2')
+  call assert_equal(2, len(dict.ret))
+  call assert_match('^\%(dead\|run\)', dict.ret['close_cb'])
+  call assert_equal('dead', dict.ret['exit_cb'])
+endfunc
+
 """"""""""
 
 let g:Ch_unletResponse = ''
@@ -1362,6 +1388,45 @@ func Test_exit_callback()
   endif
 endfunc
 
+function MyExitTimeCb(job, status)
+  if job_info(a:job).process == g:exit_cb_val.process
+    let g:exit_cb_val.end = reltime(g:exit_cb_val.start)
+  endif
+  call Resume()
+endfunction
+
+func Test_exit_callback_interval()
+  if !has('job')
+    return
+  endif
+
+  let g:exit_cb_val = {'start': reltime(), 'end': 0, 'process': 0}
+  let job = job_start([s:python, '-c', 'import time;time.sleep(0.5)'], {'exit_cb': 'MyExitTimeCb'})
+  let g:exit_cb_val.process = job_info(job).process
+  call WaitFor('type(g:exit_cb_val.end) != v:t_number || g:exit_cb_val.end != 0')
+  let elapsed = reltimefloat(g:exit_cb_val.end)
+  call assert_true(elapsed > 0.5)
+  call assert_true(elapsed < 1.0)
+
+  " case: unreferenced job, using timer
+  if !has('timers')
+    return
+  endif
+
+  let g:exit_cb_val = {'start': reltime(), 'end': 0, 'process': 0}
+  let g:job = job_start([s:python, '-c', 'import time;time.sleep(0.5)'], {'exit_cb': 'MyExitTimeCb'})
+  let g:exit_cb_val.process = job_info(g:job).process
+  unlet g:job
+  call Standby(1000)
+  if type(g:exit_cb_val.end) != v:t_number || g:exit_cb_val.end != 0
+    let elapsed = reltimefloat(g:exit_cb_val.end)
+  else
+    let elapsed = 1.0
+  endif
+  call assert_true(elapsed > 0.5)
+  call assert_true(elapsed < 1.0)
+endfunc
+
 """""""""
 
 let g:Ch_close_ret = 'alive'
@@ -1413,6 +1478,21 @@ endfunc
 func Test_job_start_invalid()
   call assert_fails('call job_start($x)', 'E474:')
   call assert_fails('call job_start("")', 'E474:')
+endfunc
+
+func Test_job_stop_immediately()
+  if !has('job')
+    return
+  endif
+
+  let job = job_start([s:python, '-c', 'import time;time.sleep(10)'])
+  try
+    call job_stop(job)
+    call WaitFor('"dead" == job_status(job)')
+    call assert_equal('dead', job_status(job))
+  finally
+    call job_stop(job, 'kill')
+  endtry
 endfunc
 
 " This was leaking memory.
@@ -1482,6 +1562,44 @@ func Test_raw_passes_nul()
 
   call delete('Xtestwrite')
   bwipe!
+endfunc
+
+func MyLineCountCb(ch, msg)
+  let g:linecount += 1
+endfunc
+
+func Test_read_nonl_line()
+  if !has('job')
+    return
+  endif
+
+  let g:linecount = 0
+  if has('win32')
+    " workaround: 'shellescape' does improper escaping double quotes
+    let arg = 'import sys;sys.stdout.write(\"1\n2\n3\")'
+  else
+    let arg = 'import sys;sys.stdout.write("1\n2\n3")'
+  endif
+  call job_start([s:python, '-c', arg], {'callback': 'MyLineCountCb'})
+  call WaitFor('3 <= g:linecount')
+  call assert_equal(3, g:linecount)
+endfunc
+
+func Test_read_from_terminated_job()
+  if !has('job')
+    return
+  endif
+
+  let g:linecount = 0
+  if has('win32')
+    " workaround: 'shellescape' does improper escaping double quotes 
+    let arg = 'import os,sys;os.close(1);sys.stderr.write(\"test\n\")'
+  else
+    let arg = 'import os,sys;os.close(1);sys.stderr.write("test\n")'
+  endif
+  call job_start([s:python, '-c', arg], {'callback': 'MyLineCountCb'})
+  call WaitFor('1 <= g:linecount')
+  call assert_equal(1, g:linecount)
 endfunc
 
 function Ch_test_close_lambda(port)

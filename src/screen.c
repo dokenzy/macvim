@@ -1510,7 +1510,7 @@ win_update(win_T *wp)
 	if (mid_start == 0)
 	{
 	    mid_end = wp->w_height;
-	    if (lastwin == firstwin)
+	    if (ONE_WINDOW)
 	    {
 		/* Clear the screen when it was not done by win_del_lines() or
 		 * win_ins_lines() above, "screen_cleared" is FALSE or MAYBE
@@ -3010,7 +3010,8 @@ win_line(
 #endif
     colnr_T	trailcol = MAXCOL;	/* start of trailing spaces */
 #ifdef FEAT_LINEBREAK
-    int		need_showbreak = FALSE;
+    int		need_showbreak = FALSE; /* overlong line, skipping first x
+					   chars */
 #endif
 #if defined(FEAT_SIGNS) || (defined(FEAT_QUICKFIX) && defined(FEAT_WINDOWS)) \
 	|| defined(FEAT_SYN_HL) || defined(FEAT_DIFF)
@@ -3793,13 +3794,15 @@ win_line(
 	    if (draw_state == WL_BRI - 1 && n_extra == 0)
 	    {
 		draw_state = WL_BRI;
-		if (wp->w_p_bri && n_extra == 0 && row != startrow
+		/* if need_showbreak is set, breakindent also applies */
+		if (wp->w_p_bri && n_extra == 0
+					 && (row != startrow || need_showbreak)
 # ifdef FEAT_DIFF
 			&& filler_lines == 0
 # endif
 		   )
 		{
-		    char_attr = 0; /* was: hl_attr(HLF_AT); */
+		    char_attr = 0;
 # ifdef FEAT_DIFF
 		    if (diff_hlf != (hlf_T)0)
 		    {
@@ -3981,9 +3984,6 @@ win_line(
 			else if (v == (long)shl->endcol)
 			{
 			    shl->attr_cur = 0;
-#ifdef FEAT_CONCEAL
-			    prev_syntax_id = 0;
-#endif
 			    next_search_hl(wp, shl, lnum, (colnr_T)v,
 					       shl == &search_hl ? NULL : cur);
 			    pos_inprogress = cur == NULL || cur->pos.cur == 0
@@ -5678,7 +5678,10 @@ win_line(
 #ifdef FEAT_DIFF
 		     && filler_todo <= 0
 #endif
-		     && W_WIDTH(wp) == Columns)
+#ifdef FEAT_WINDOWS
+		     && W_WIDTH(wp) == Columns
+#endif
+		     )
 	    {
 		/* Remember that the line wraps, used for modeless copy. */
 		LineWraps[screen_row - 1] = TRUE;
@@ -7786,6 +7789,10 @@ next_search_hl(
     }
 }
 
+/*
+ * If there is a match fill "shl" and return one.
+ * Return zero otherwise.
+ */
     static int
 next_search_hl_pos(
     match_T	    *shl,	/* points to a match */
@@ -7794,53 +7801,52 @@ next_search_hl_pos(
     colnr_T	    mincol)	/* minimal column for a match */
 {
     int	    i;
-    int	    bot = -1;
+    int	    found = -1;
 
-    shl->lnum = 0;
     for (i = posmatch->cur; i < MAXPOSMATCH; i++)
     {
-	if (posmatch->pos[i].lnum == 0)
-	    break;
-	if (posmatch->pos[i].col < mincol)
-	    continue;
-	if (posmatch->pos[i].lnum == lnum)
-	{
-	    if (shl->lnum == lnum)
-	    {
-		/* partially sort positions by column numbers
-		 * on the same line */
-		if (posmatch->pos[i].col < posmatch->pos[bot].col)
-		{
-		    llpos_T	tmp = posmatch->pos[i];
+	llpos_T	*pos = &posmatch->pos[i];
 
-		    posmatch->pos[i] = posmatch->pos[bot];
-		    posmatch->pos[bot] = tmp;
+	if (pos->lnum == 0)
+	    break;
+	if (pos->len == 0 && pos->col < mincol)
+	    continue;
+	if (pos->lnum == lnum)
+	{
+	    if (found >= 0)
+	    {
+		/* if this match comes before the one at "found" then swap
+		 * them */
+		if (pos->col < posmatch->pos[found].col)
+		{
+		    llpos_T	tmp = *pos;
+
+		    *pos = posmatch->pos[found];
+		    posmatch->pos[found] = tmp;
 		}
 	    }
 	    else
-	    {
-		bot = i;
-		shl->lnum = lnum;
-	    }
+		found = i;
 	}
     }
     posmatch->cur = 0;
-    if (shl->lnum == lnum && bot >= 0)
+    if (found >= 0)
     {
-	colnr_T	start = posmatch->pos[bot].col == 0
-					     ? 0 : posmatch->pos[bot].col - 1;
-	colnr_T	end = posmatch->pos[bot].col == 0
-				    ? MAXCOL : start + posmatch->pos[bot].len;
+	colnr_T	start = posmatch->pos[found].col == 0
+					    ? 0 : posmatch->pos[found].col - 1;
+	colnr_T	end = posmatch->pos[found].col == 0
+				   ? MAXCOL : start + posmatch->pos[found].len;
 
+	shl->lnum = lnum;
 	shl->rm.startpos[0].lnum = 0;
 	shl->rm.startpos[0].col = start;
 	shl->rm.endpos[0].lnum = 0;
 	shl->rm.endpos[0].col = end;
 	shl->is_addpos = TRUE;
-	posmatch->cur = bot + 1;
-	return TRUE;
+	posmatch->cur = found + 1;
+	return 1;
     }
-    return FALSE;
+    return 0;
 }
 #endif
 
@@ -10553,7 +10559,7 @@ fillchar_status(int *attr, int is_curwin)
      * window differs, or the fillchars differ, or this is not the
      * current window */
     if (*attr != 0 && ((hl_attr(HLF_S) != hl_attr(HLF_SNC)
-			|| !is_curwin || firstwin == lastwin)
+			|| !is_curwin || ONE_WINDOW)
 		    || (fill_stl != fill_stlnc)))
 	return fill;
     if (is_curwin)
