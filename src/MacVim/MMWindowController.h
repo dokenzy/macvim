@@ -40,6 +40,7 @@
     int                 userCols;
     NSPoint             userTopLeft;
     NSPoint             defaultTopLeft;
+    NSSize              desiredWindowSize;
     NSToolbar           *toolbar;
     BOOL                resizingDueToMove;
     int                 blurRadius;
@@ -77,6 +78,7 @@
 - (void)showToolbar:(BOOL)on size:(int)size mode:(int)mode;
 - (void)setMouseShape:(int)shape;
 - (void)adjustLinespace:(int)linespace;
+- (void)adjustColumnspace:(int)columnspace;
 - (void)liveResizeWillStart;
 - (void)liveResizeDidEnd;
 

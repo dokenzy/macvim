@@ -366,11 +366,14 @@ typedef struct dsc$descriptor   DESC;
 
 #ifdef VMS
 # define DFLT_RUNTIMEPATH      "sys$login:vimfiles,$VIM/vimfiles,$VIMRUNTIME,$VIM/vimfiles/after,sys$login:vimfiles/after"
+# define CLEAN_RUNTIMEPATH      "$VIM/vimfiles,$VIMRUNTIME,$VIM/vimfiles/after"
 #else
 # ifdef RUNTIME_GLOBAL
 #  define DFLT_RUNTIMEPATH	"~/.vim," RUNTIME_GLOBAL ",$VIMRUNTIME," RUNTIME_GLOBAL "/after,~/.vim/after"
+#  define CLEAN_RUNTIMEPATH	RUNTIME_GLOBAL ",$VIMRUNTIME," RUNTIME_GLOBAL "/after"
 # else
 #  define DFLT_RUNTIMEPATH	"~/.vim,$VIM/vimfiles,$VIMRUNTIME,$VIM/vimfiles/after,~/.vim/after"
+#  define CLEAN_RUNTIMEPATH	"$VIM/vimfiles,$VIMRUNTIME,$VIM/vimfiles/after"
 # endif
 #endif
 
@@ -423,21 +426,17 @@ typedef struct dsc$descriptor   DESC;
 # endif
 #endif
 
-/* memmove is not present on all systems, use memmove, bcopy, memcpy or our
- * own version */
-/* Some systems have (void *) arguments, some (char *). If we use (char *) it
+/* memmove() is not present on all systems, use memmove, bcopy or memcpy.
+ * Some systems have (void *) arguments, some (char *). If we use (char *) it
  * works for all */
-#ifdef USEMEMMOVE
+#if defined(USEMEMMOVE) || (!defined(USEBCOPY) && !defined(USEMEMCPY))
 # define mch_memmove(to, from, len) memmove((char *)(to), (char *)(from), len)
 #else
 # ifdef USEBCOPY
 #  define mch_memmove(to, from, len) bcopy((char *)(from), (char *)(to), len)
 # else
-#  ifdef USEMEMCPY
+    /* ifdef USEMEMCPY */
 #   define mch_memmove(to, from, len) memcpy((char *)(to), (char *)(from), len)
-#  else
-#   define VIM_MEMMOVE	    /* found in misc2.c */
-#  endif
 # endif
 #endif
 

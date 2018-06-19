@@ -51,7 +51,7 @@
 #define DRAW_UNDERC               0x08    /* draw undercurl text */
 #define DRAW_ITALIC               0x10    /* draw italic text */
 #define DRAW_CURSOR               0x20
-#define DRAW_WIDE                 0x40    /* draw wide text */
+#define DRAW_WIDE                 0x80    /* draw wide text */
 
 
 static NSString *MMWideCharacterAttributeName = @"MMWideChar";
@@ -72,7 +72,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
 - (id)init
 {
     if ((self = [super init])) {
-        attribString = [[NSMutableAttributedString alloc] initWithString:@""];
+        backingStore = [[NSTextStorage alloc] init];
         // NOTE!  It does not matter which font is set here, Vim will set its
         // own font on startup anyway.  Just set some bogus values.
         font = [[NSFont userFixedPitchFontOfSize:0] retain];
@@ -104,19 +104,19 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     [font release];  font = nil;
     [defaultBackgroundColor release];  defaultBackgroundColor = nil;
     [defaultForegroundColor release];  defaultForegroundColor = nil;
-    [attribString release];  attribString = nil;
+    [backingStore release];  backingStore = nil;
     [super dealloc];
 }
 
 - (NSString *)string
 {
-    return [attribString string];
+    return [backingStore string];
 }
 
 - (NSDictionary *)attributesAtIndex:(NSUInteger)index
                      effectiveRange:(NSRangePointer)range
 {
-    return [attribString attributesAtIndex:index effectiveRange:range];
+    return [backingStore attributesAtIndex:index effectiveRange:range];
 }
 
 - (void)replaceCharactersInRange:(NSRange)range
@@ -126,7 +126,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     ASLogWarn(@"Calling %@ on MMTextStorage is unsupported",
               NSStringFromSelector(_cmd));
 #endif
-    //[attribString replaceCharactersInRange:range withString:string];
+    //[backingStore replaceCharactersInRange:range withString:string];
 }
 
 - (void)setAttributes:(NSDictionary *)attributes range:(NSRange)range
@@ -134,7 +134,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     // NOTE!  This method must be implemented since the text system calls it
     // constantly to 'fix attributes', apply font substitution, etc.
 #if 0
-    [attribString setAttributes:attributes range:range];
+    [backingStore setAttributes:attributes range:range];
 #elif 1
     // HACK! If the font attribute is being modified, then ensure that the new
     // font has a fixed advancement which is either the same as the current
@@ -153,7 +153,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             return;
 
         float adv = cellSize.width;
-        if ([attribString attribute:MMWideCharacterAttributeName
+        if ([backingStore attribute:MMWideCharacterAttributeName
                             atIndex:range.location
                      effectiveRange:NULL])
             adv += adv;
@@ -170,9 +170,9 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             dictionaryWithDictionary:attributes];
         [newAttr setObject:newFont forKey:NSFontAttributeName];
 
-        [attribString setAttributes:newAttr range:range];
+        [backingStore setAttributes:newAttr range:range];
     } else {
-        [attribString setAttributes:attributes range:range];
+        [backingStore setAttributes:attributes range:range];
     }
 #endif
 }
@@ -202,6 +202,11 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     return linespace;
 }
 
+- (float)columnspace
+{
+    return columnspace;
+}
+
 - (void)setLinespace:(float)newLinespace
 {
     NSLayoutManager *lm = [[self layoutManagers] objectAtIndex:0];
@@ -219,6 +224,25 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     // linespace is non-zero the baseline will be adjusted as well; check
     // MMTypesetter.
     cellSize.height = linespace + [lm defaultLineHeightForFont:font];
+}
+
+- (void)setColumnspace:(float)newColumnspace
+{
+    NSLayoutManager *lm = [[self layoutManagers] objectAtIndex:0];
+    if (!lm) {
+        ASLogWarn(@"No layout manager available");
+        return;
+    }
+
+    columnspace = newColumnspace;
+
+    float em = [@"m" sizeWithAttributes:
+            [NSDictionary dictionaryWithObject:font
+                                        forKey:NSFontAttributeName]].width;
+    float cellWidthMultiplier = [[NSUserDefaults standardUserDefaults]
+            floatForKey:MMCellWidthMultiplierKey];
+
+    cellSize.width = columnspace + ceilf(em * cellWidthMultiplier);
 }
 
 - (void)getMaxRows:(int*)rows columns:(int*)cols
@@ -305,15 +329,15 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     }
 
     // Mark these characters as wide.  This attribute is subsequently checked
-    // when translating (row,col) pairs to offsets within 'attribString'.
+    // when translating (row,col) pairs to offsets within 'backingStore'.
     if (flags & DRAW_WIDE)
         [attributes setObject:[NSNull null]
                        forKey:MMWideCharacterAttributeName];
 
     // Replace characters in text storage and apply new attributes.
     NSRange r = NSMakeRange(range.location, [string length]);
-    [attribString replaceCharactersInRange:range withString:string];
-    [attribString setAttributes:attributes range:r];
+    [backingStore replaceCharactersInRange:range withString:string];
+    [backingStore setAttributes:attributes range:r];
 
     NSInteger changeInLength = [string length] - range.length;
     if (acells != cells || acol != col) {
@@ -321,18 +345,18 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             // NOTE: A normal width character replaced a double width
             // character.  To maintain the invariant that each row covers the
             // same amount of cells, we compensate by adding an empty column.
-            [attribString replaceCharactersInRange:NSMakeRange(NSMaxRange(r),0)
+            [backingStore replaceCharactersInRange:NSMakeRange(NSMaxRange(r),0)
                 withAttributedString:[emptyRowString
                     attributedSubstringFromRange:NSMakeRange(0,1)]];
             ++changeInLength;
 #if 0
         } else if (acol == col - 1) {
-            [attribString replaceCharactersInRange:NSMakeRange(r.location,0)
+            [backingStore replaceCharactersInRange:NSMakeRange(r.location,0)
                 withAttributedString:[emptyRowString
                     attributedSubstringFromRange:NSMakeRange(0,1)]];
             ++changeInLength;
         } else if (acol == col + 1) {
-            [attribString replaceCharactersInRange:NSMakeRange(r.location-1,1)
+            [backingStore replaceCharactersInRange:NSMakeRange(r.location-1,1)
                 withAttributedString:[emptyRowString
                     attributedSubstringFromRange:NSMakeRange(0,2)]];
             ++changeInLength;
@@ -411,10 +435,10 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             return;
         }
 
-        NSAttributedString *srcString = [attribString
+        NSAttributedString *srcString = [backingStore
                 attributedSubstringFromRange:srcRange];
 
-        [attribString replaceCharactersInRange:destRange
+        [backingStore replaceCharactersInRange:destRange
                           withAttributedString:srcString];
         [self edited:(NSTextStorageEditedCharacters
                 | NSTextStorageEditedAttributes) range:destRange
@@ -447,9 +471,9 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             return;
         }
 
-        [attribString replaceCharactersInRange:destRange
+        [backingStore replaceCharactersInRange:destRange
                           withAttributedString:emptyString];
-        [attribString setAttributes:attribs
+        [backingStore setAttributes:attribs
                               range:NSMakeRange(destRange.location, width)];
 
         [self edited:(NSTextStorageEditedAttributes
@@ -507,9 +531,9 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             return;
         }
 
-        NSAttributedString *srcString = [attribString
+        NSAttributedString *srcString = [backingStore
                 attributedSubstringFromRange:srcRange];
-        [attribString replaceCharactersInRange:destRange
+        [backingStore replaceCharactersInRange:destRange
                           withAttributedString:srcString];
         [self edited:(NSTextStorageEditedCharacters
                 | NSTextStorageEditedAttributes) range:destRange
@@ -542,9 +566,9 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             return;
         }
 
-        [attribString replaceCharactersInRange:destRange
+        [backingStore replaceCharactersInRange:destRange
                           withAttributedString:emptyString];
-        [attribString setAttributes:attribs
+        [backingStore setAttributes:attribs
                               range:NSMakeRange(destRange.location, width)];
 
         [self edited:(NSTextStorageEditedAttributes
@@ -589,9 +613,9 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             return;
         }
 
-        [attribString replaceCharactersInRange:range
+        [backingStore replaceCharactersInRange:range
                           withAttributedString:emptyString];
-        [attribString setAttributes:attribs
+        [backingStore setAttributes:attribs
                               range:NSMakeRange(range.location, cells)];
 
         [self edited:(NSTextStorageEditedAttributes
@@ -662,6 +686,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
         NSLayoutManager *lm = [[self layoutManagers] objectAtIndex:0];
         if (lm) {
             cellSize.height = linespace + [lm defaultLineHeightForFont:font];
+            cellSize.width = columnspace + ceilf(em * cellWidthMultiplier);
         } else {
             // Should never happen, set some bogus value for cell height.
             ASLogWarn(@"No layout manager available");
@@ -892,7 +917,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     int cells = 1;
     NSRange r = [self charRangeForRow:row column:&col cells:&cells];
     if (NSNotFound != r.location
-            && [attribString attribute:MMWideCharacterAttributeName
+            && [backingStore attribute:MMWideCharacterAttributeName
                                atIndex:r.location
                         effectiveRange:nil])
         rect.size.width += rect.size.width;
@@ -933,7 +958,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     if (!force && actualRows == maxRows && actualColumns == maxColumns)
         return;
 
-    NSRange oldRange = NSMakeRange(0, [attribString length]);
+    NSRange oldRange = NSMakeRange(0, [backingStore length]);
 
     actualRows = maxRows;
     actualColumns = maxColumns;
@@ -965,16 +990,16 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     emptyRowString = [[NSAttributedString alloc] initWithString:rowString
                                                      attributes:dict];
 
-    [attribString release];
-    attribString = [[NSMutableAttributedString alloc] init];
+    [backingStore release];
+    backingStore = [[NSTextStorage alloc] init];
     for (i=0; i<maxRows; ++i) {
 #if MM_USE_ROW_CACHE
         rowCache[i].length = actualColumns + 1;
 #endif
-        [attribString appendAttributedString:emptyRowString];
+        [backingStore appendAttributedString:emptyRowString];
     }
 
-    NSRange fullRange = NSMakeRange(0, [attribString length]);
+    NSRange fullRange = NSMakeRange(0, [backingStore length]);
     [self edited:(NSTextStorageEditedCharacters|NSTextStorageEditedAttributes)
            range:oldRange changeInLength:fullRange.length-oldRange.length];
 }
@@ -989,7 +1014,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     if (characterEqualsColumn)
         return NSMakeRange(row*(actualColumns+1) + col, cells);
 
-    NSString *string = [attribString string];
+    NSString *string = [backingStore string];
     unsigned stringLen = [string length];
     NSRange r, range = { NSNotFound, 0 };
     unsigned idx;
@@ -1057,7 +1082,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
                 r = [string rangeOfComposedCharacterSequenceAtIndex:idx];
 
                 // Wide chars take up two display cells.
-                if ([attribString attribute:MMWideCharacterAttributeName
+                if ([backingStore attribute:MMWideCharacterAttributeName
                                     atIndex:idx
                              effectiveRange:nil])
                     ++i;
@@ -1075,7 +1100,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
                 --i;
 
                 // Wide chars take up two display cells.
-                if ([attribString attribute:MMWideCharacterAttributeName
+                if ([backingStore attribute:MMWideCharacterAttributeName
                                     atIndex:idx
                              effectiveRange:nil])
                     --i;
@@ -1102,7 +1127,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             r = [string rangeOfComposedCharacterSequenceAtIndex:idx];
 
             // Wide chars take up two display cells.
-            if ([attribString attribute:MMWideCharacterAttributeName
+            if ([backingStore attribute:MMWideCharacterAttributeName
                                 atIndex:idx
                          effectiveRange:nil])
                 ++i;
@@ -1124,7 +1149,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
         r = [string rangeOfComposedCharacterSequenceAtIndex:idx];
 
         // Wide chars take up two display cells.
-        if ([attribString attribute:MMWideCharacterAttributeName
+        if ([backingStore attribute:MMWideCharacterAttributeName
                             atIndex:idx
                      effectiveRange:nil])
             ++i;
@@ -1141,7 +1166,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
         r = [string rangeOfComposedCharacterSequenceAtIndex:idx];
 
         // Wide chars take up two display cells.
-        if ([attribString attribute:MMWideCharacterAttributeName
+        if ([backingStore attribute:MMWideCharacterAttributeName
                             atIndex:idx
                      effectiveRange:nil])
             ++i;
@@ -1193,14 +1218,14 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
     // TODO: Treat these separately inside of Vim so we don't have to bother
     // here.
     while (range.length > 0) {
-        invalidRange = [[attribString string]
+        invalidRange = [[backingStore string]
             rangeOfCharacterFromSet:invalidCharacterSet
                             options:NSLiteralSearch
                               range:range];
         if (NSNotFound == invalidRange.location)
             break;
 
-        [attribString replaceCharactersInRange:invalidRange withString:@" "];
+        [backingStore replaceCharactersInRange:invalidRange withString:@" "];
 
         end = NSMaxRange(invalidRange);
         range.length -= end - range.location;

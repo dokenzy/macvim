@@ -25,7 +25,7 @@ typedef struct {
 
 
 @interface MMTextStorage : NSTextStorage {
-    NSMutableAttributedString   *attribString;
+    NSTextStorage               *backingStore;
     int                         maxRows, maxColumns;
     int                         actualRows, actualColumns;
     NSAttributedString          *emptyRowString;
@@ -41,6 +41,7 @@ typedef struct {
     NSColor                     *defaultForegroundColor;
     NSSize                      cellSize;
     float                       linespace;
+    float                       columnspace;
 #if MM_USE_ROW_CACHE
     MMRowCacheEntry             *rowCache;
 #endif
@@ -59,7 +60,9 @@ typedef struct {
 - (int)actualRows;
 - (int)actualColumns;
 - (float)linespace;
+- (float)columnspace;
 - (void)setLinespace:(float)newLinespace;
+- (void)setColumnspace:(float)newColumnspace;
 - (void)getMaxRows:(int*)rows columns:(int*)cols;
 - (void)setMaxRows:(int)rows columns:(int)cols;
 - (void)drawString:(NSString *)string atRow:(int)row column:(int)col

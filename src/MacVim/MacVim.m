@@ -64,6 +64,7 @@ char *MessageStrings[] =
     "MouseMovedMsgID",
     "SetMouseShapeMsgID",
     "AdjustLinespaceMsgID",
+    "AdjustColumnspaceMsgID",
     "ActivateMsgID",
     "SetServerNameMsgID",
     "EnterFullScreenMsgID",
@@ -116,6 +117,8 @@ NSString *MMLogToStdErrKey  = @"MMLogToStdErr";
 // Argument used to stop MacVim from opening an empty window on startup
 // (techincally this is a user default but should not be used as such).
 NSString *MMNoWindowKey = @"MMNoWindow";
+
+NSString *MMShareFindPboardKey = @"MMShareFindPboard";
 
 NSString *MMAutosaveRowsKey    = @"MMAutosaveRows";
 NSString *MMAutosaveColumnsKey = @"MMAutosaveColumns";

@@ -273,3 +273,101 @@ func Test_gd_string_only()
 	\ ]
   call XTest_goto_decl('gd', lines, 5, 10)
 endfunc
+
+" Check that setting 'cursorline' does not change curswant
+func Test_cursorline_keep_col()
+  new
+  call setline(1, ['long long long line', 'short line'])
+  normal ggfi
+  let pos = getcurpos()
+  normal j
+  set cursorline
+  normal k
+  call assert_equal(pos, getcurpos())
+  bwipe!
+  set nocursorline
+endfunc
+
+func Test_gd_local_block()
+  let lines = [
+	\ '  int main()',
+	\ '{',
+	\ '  char *a = "NOT NULL";',
+	\ '  if(a)',
+	\ '  {',
+	\ '    char *b = a;',
+	\ '    printf("%s\n", b);',
+	\ '  }',
+	\ '  else',
+	\ '  {',
+	\ '    char *b = "NULL";',
+	\ '    return b;',
+	\ '  }',
+	\ '',
+	\ '  return 0;',
+	\ '}',
+  \ ]
+  call XTest_goto_decl('1gd', lines, 11, 11)
+endfunc
+
+func Test_motion_if_elif_else_endif()
+  new
+  a
+/* Test pressing % on #if, #else #elsif and #endif,
+ * with nested #if
+ */
+#if FOO
+/* ... */
+#  if BAR
+/* ... */
+#  endif
+#elif BAR
+/* ... */
+#else
+/* ... */
+#endif
+.
+  /#if FOO
+  norm %
+  call assert_equal([9, 1], getpos('.')[1:2])
+  norm %
+  call assert_equal([11, 1], getpos('.')[1:2])
+  norm %
+  call assert_equal([13, 1], getpos('.')[1:2])
+  norm %
+  call assert_equal([4, 1], getpos('.')[1:2])
+  /#  if BAR
+  norm $%
+  call assert_equal([8, 1], getpos('.')[1:2])
+  norm $%
+  call assert_equal([6, 1], getpos('.')[1:2])
+
+  bw!
+endfunc
+
+func Test_motion_c_comment()
+  new
+  a
+/*
+ * Test pressing % on beginning/end
+ * of C comments.
+ */
+/* Another comment */
+.
+  norm gg0%
+  call assert_equal([4, 3], getpos('.')[1:2])
+  norm %
+  call assert_equal([1, 1], getpos('.')[1:2])
+  norm gg0l%
+  call assert_equal([4, 3], getpos('.')[1:2])
+  norm h%
+  call assert_equal([1, 1], getpos('.')[1:2])
+
+  norm G^
+  norm %
+  call assert_equal([5, 21], getpos('.')[1:2])
+  norm %
+  call assert_equal([5, 1], getpos('.')[1:2])
+
+  bw!
+endfunc

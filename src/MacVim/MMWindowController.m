@@ -594,11 +594,12 @@
         // TODO: What if the resize message fails to make it back?
         if (!didMaximize) {
             NSSize originalSize = [vimView frame].size;
-            NSSize contentSize = [vimView desiredSize];
-            contentSize = [self constrainContentSizeToScreenSize:contentSize];
             int rows = 0, cols = 0;
-            contentSize = [vimView constrainRows:&rows columns:&cols
-                                          toSize:contentSize];
+            NSSize contentSize = [vimView constrainRows:&rows columns:&cols
+                                                 toSize:
+                                  fullScreenWindow ? [fullScreenWindow frame].size :
+                                  fullScreenEnabled ? desiredWindowSize :
+                                  [self constrainContentSizeToScreenSize:[vimView desiredSize]]];
             [vimView setFrameSize:contentSize];
 
             if (fullScreenWindow) {
@@ -660,6 +661,14 @@
     }
 }
 
+- (void)adjustColumnspace:(int)columnspace
+{
+    if (vimView && [vimView textView]) {
+        [[vimView textView] setColumnspace:(float)columnspace];
+        shouldMaximizeWindow = shouldResizeVimView = YES;
+    }
+}
+
 - (void)liveResizeWillStart
 {
     if (!setupDone) return;
@@ -688,37 +697,6 @@
     id proxy = [vimController backendProxy];
     NSConnection *connection = [(NSDistantObject*)proxy connectionForProxy];
     [connection removeRequestMode:NSEventTrackingRunLoopMode];
-
-    // NOTE: During live resize messages from MacVim to Vim are often dropped
-    // (because too many messages are sent at once).  This may lead to
-    // inconsistent states between Vim and MacVim; to avoid this we send a
-    // synchronous resize message to Vim now (this is not fool-proof, but it
-    // does seem to work quite well).
-    // Do NOT send a SetTextDimensionsMsgID message (as opposed to
-    // LiveResizeMsgID) since then the view is constrained to not be larger
-    // than the screen the window mostly occupies; this makes it impossible to
-    // resize the window across multiple screens.
-
-    int constrained[2];
-    NSSize textViewSize = [[vimView textView] frame].size;
-    [[vimView textView] constrainRows:&constrained[0] columns:&constrained[1]
-                               toSize:textViewSize];
-
-    ASLogDebug(@"End of live resize, notify Vim that text dimensions are %dx%d",
-               constrained[1], constrained[0]);
-
-    NSData *data = [NSData dataWithBytes:constrained length:2*sizeof(int)];
-    BOOL sendOk = [vimController sendMessageNow:LiveResizeMsgID
-                                           data:data
-                                        timeout:.5];
-
-    if (!sendOk) {
-        // Sending of synchronous message failed.  Force the window size to
-        // match the last dimensions received from Vim, otherwise we end up
-        // with inconsistent states.
-        [self resizeWindowToFitContentSize:[vimView desiredSize]
-                              keepOnScreen:NO];
-    }
 
     // If we saved the original title while resizing, restore it.
     if (lastSetTitle != nil) {
@@ -1024,6 +1002,11 @@
             (int)(NSMaxY([[decoratedWindow screen] frame]) - topLeft.y) };
     NSData *data = [NSData dataWithBytes:pos length:2*sizeof(int)];
     [vimController sendMessage:SetWindowPositionMsgID data:data];
+}
+
+- (NSSize)windowWillResize:(NSWindow *)sender toSize:(NSSize)frameSize {
+    desiredWindowSize = frameSize;
+    return frameSize;
 }
 
 - (void)windowDidResize:(id)sender
@@ -1561,10 +1544,14 @@
 
         // See gui_macvim_add_to_find_pboard() for an explanation of these
         // types.
-        if ([bestType isEqual:VimFindPboardType])
+        if ([bestType isEqual:VimFindPboardType]) {
             query = [pb stringForType:VimFindPboardType];
-        else
-            query = [pb stringForType:NSStringPboardType];
+        } else {
+            BOOL shareFindPboard = [[NSUserDefaults standardUserDefaults]
+                                                boolForKey:MMShareFindPboardKey];
+            if (shareFindPboard)
+                query = [pb stringForType:NSStringPboardType];
+        }
     }
 
     NSString *input = nil;

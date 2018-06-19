@@ -22,6 +22,7 @@
     NSFont                      *font;
     NSFont                      *fontWide;
     float                       linespace;
+    float                       columnspace;
 
     // From NSTextView
     NSSize                      insetSize;
@@ -30,6 +31,7 @@
     BOOL                        antialias;
     BOOL                        ligatures;
     BOOL                        thinStrokes;
+    BOOL                        drawPending;
     NSMutableArray              *drawData;
 
     MMTextViewHelper            *helper;
@@ -42,6 +44,7 @@
     BOOL                        cgLayerEnabled;
     CGLayerRef                  cgLayer;
     CGContextRef                cgLayerContext;
+    NSLock                      *cgLayerLock;
 
     // These are used in MMCoreTextView+ToolTip.m
     id trackingRectOwner_;              // (not retained)
@@ -94,6 +97,7 @@
 //
 // NSTextView methods
 //
+- (void)setFrameSize:(NSSize)newSize;
 - (void)keyDown:(NSEvent *)event;
 - (void)insertText:(id)string;
 - (void)doCommandBySelector:(SEL)selector;

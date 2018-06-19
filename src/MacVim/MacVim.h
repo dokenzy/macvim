@@ -210,6 +210,7 @@ enum {
     MouseMovedMsgID,
     SetMouseShapeMsgID,
     AdjustLinespaceMsgID,
+    AdjustColumnspaceMsgID,
     ActivateMsgID,
     SetServerNameMsgID,
     EnterFullScreenMsgID,
@@ -312,6 +313,9 @@ extern NSString *MMLogToStdErrKey;
 // Argument used to stop MacVim from opening an empty window on startup
 // (techincally this is a user default but should not be used as such).
 extern NSString *MMNoWindowKey;
+
+// Argument used to control MacVim sharing search text via the Find Pasteboard.
+extern NSString *MMShareFindPboardKey;
 
 extern NSString *MMAutosaveRowsKey;
 extern NSString *MMAutosaveColumnsKey;

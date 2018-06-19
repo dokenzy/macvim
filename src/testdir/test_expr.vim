@@ -87,7 +87,7 @@ endfunc
 func Test_loop_over_null_list()
   let null_list = test_null_list()
   for i in null_list
-    call assert_true(0, 'should not get here')
+    call assert_report('should not get here')
   endfor
 endfunc
 
@@ -131,6 +131,9 @@ func Test_option_value()
 endfunc
 
 function Test_printf_misc()
+  call assert_equal('123', printf('123'))
+  call assert_fails("call printf('123', 3)", "E767:")
+
   call assert_equal('123', printf('%d', 123))
   call assert_equal('123', printf('%i', 123))
   call assert_equal('123', printf('%D', 123))
@@ -472,4 +475,9 @@ func Test_setmatches()
   endif
   call setmatches(set)
   call assert_equal(exp, getmatches())
+endfunc
+
+func Test_empty_concatenate()
+  call assert_equal('b', 'a'[4:0] . 'b')
+  call assert_equal('b', 'b' . 'a'[4:0])
 endfunc

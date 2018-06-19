@@ -233,6 +233,8 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
         [NSNumber numberWithBool:NO],     MMSuppressTerminationAlertKey,
         [NSNumber numberWithBool:YES],    MMNativeFullScreenKey,
         [NSNumber numberWithDouble:0.25], MMFullScreenFadeTimeKey,
+        [NSNumber numberWithBool:NO],     MMUseCGLayerAlwaysKey,
+        [NSNumber numberWithBool:YES],    MMShareFindPboardKey,
         nil];
 
     [[NSUserDefaults standardUserDefaults] registerDefaults:dict];
@@ -1193,6 +1195,27 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
 {
     ASLogDebug(@"Zoom all windows");
     [NSApp makeWindowsPerform:@selector(performZoom:) inOrder:YES];
+}
+
+- (IBAction)stayInFront:(id)sender
+{
+    ASLogDebug(@"Stay in Front");
+    NSWindow *keyWindow = [NSApp keyWindow];
+    [keyWindow setLevel:NSFloatingWindowLevel];
+}
+
+- (IBAction)stayInBack:(id)sender
+{
+    ASLogDebug(@"Stay in Back");
+    NSWindow *keyWindow = [NSApp keyWindow];
+    [keyWindow setLevel:kCGDesktopIconWindowLevel +1];
+}
+
+- (IBAction)stayLevelNormal:(id)sender
+{
+    ASLogDebug(@"Stay level normal");
+    NSWindow *keyWindow = [NSApp keyWindow];
+    [keyWindow setLevel:NSNormalWindowLevel];
 }
 
 - (IBAction)coreTextButtonClicked:(id)sender

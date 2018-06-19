@@ -24,6 +24,8 @@ int use_gui_macvim_draw_string = 1;
 
 static int use_graphical_sign = 0;
 
+static BOOL is_macos_high_sierra_or_later = NO;
+
 // Max number of files to add to MRU in one go (this matches the maximum that
 // Cocoa displays in the MRU -- if this changes in Cocoa then update this
 // number as well).
@@ -36,6 +38,7 @@ static int MMDefaultFontSize       = 11;
 static int MMMinFontSize           = 6;
 static int MMMaxFontSize           = 100;
 
+static BOOL MMShareFindPboard      = YES;
 
 static GuiFont gui_macvim_font_with_name(char_u *name);
 static int specialKeyToNSKey(int key);
@@ -198,6 +201,15 @@ gui_macvim_after_fork_init()
         // signs.
         use_graphical_sign = (val == MMRendererCoreText);
     }
+
+    // Check to use the Find Pasteboard.
+    MMShareFindPboard = CFPreferencesGetAppBooleanValue((CFStringRef)MMShareFindPboardKey,
+                                                        kCFPreferencesCurrentApplication,
+                                                        &keyValid);
+    if (!keyValid) {
+        // Share text via the Find Pasteboard by default.
+        MMShareFindPboard = YES;
+    }
 }
 
 
@@ -252,6 +264,7 @@ gui_mch_init(void)
     // Ensure 'linespace' option is passed along to MacVim in case it was set
     // in [g]vimrc.
     gui_mch_adjust_charheight();
+    gui_mch_adjust_charwidth();
 
     if (!MMNoMRU && GARGCOUNT > 0) {
         // Add files passed on command line to MRU.
@@ -271,6 +284,17 @@ gui_mch_init(void)
 
         [[MMBackend sharedInstance] addToMRU:filenames];
     }
+
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_10
+    if ([[NSProcessInfo processInfo]
+              respondsToSelector:@selector(isOperatingSystemAtLeastVersion:)])
+    {
+        NSOperatingSystemVersion version = {10, 13, 0};
+
+        is_macos_high_sierra_or_later = [[NSProcessInfo processInfo]
+                                     isOperatingSystemAtLeastVersion:version];
+    }
+#endif
 
     return OK;
 }
@@ -322,7 +346,7 @@ gui_mch_update(void)
     static CFAbsoluteTime lastTime = 0;
 
     CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
-    if (nowTime - lastTime > 0.2) {
+    if (nowTime - lastTime > 1.0 / 30) {
         [[MMBackend sharedInstance] update];
         lastTime = nowTime;
     }
@@ -453,41 +477,16 @@ gui_mch_delete_lines(int row, int num_lines)
 }
 
 
-    void
-gui_mch_draw_string(int row, int col, char_u *s, int len, int cells, int flags)
-{
-#ifdef FEAT_MBYTE
-    char_u *conv_str = NULL;
-    if (output_conv.vc_type != CONV_NONE) {
-        conv_str = string_convert(&output_conv, s, &len);
-        if (conv_str)
-            s = conv_str;
-    }
-#endif
-
-    [[MMBackend sharedInstance] drawString:s
-                                    length:len
-                                       row:row
-                                    column:col
-                                     cells:cells
-                                     flags:flags];
-#ifdef FEAT_MBYTE
-    if (conv_str)
-        vim_free(conv_str);
-#endif
-}
-
-
     int
 gui_macvim_draw_string(int row, int col, char_u *s, int len, int flags)
 {
-    int c, cn, cl, i;
+    MMBackend *backend = [MMBackend sharedInstance];
+#ifdef FEAT_MBYTE
+    int c, cw, cl, ccl;
     int start = 0;
     int endcol = col;
     int startcol = col;
     BOOL wide = NO;
-    MMBackend *backend = [MMBackend sharedInstance];
-#ifdef FEAT_MBYTE
     char_u *conv_str = NULL;
 
     if (output_conv.vc_type != CONV_NONE) {
@@ -495,45 +494,62 @@ gui_macvim_draw_string(int row, int col, char_u *s, int len, int flags)
         if (conv_str)
             s = conv_str;
     }
-#endif
 
     // Loop over each character and output text when it changes from normal to
     // wide and vice versa.
-    for (i = 0; i < len; i += cl) {
+    for (int i = 0; i < len; i += cl) {
         c = utf_ptr2char(s + i);
-        cn = utf_char2cells(c);
+        cw = utf_char2cells(c);
         cl = utf_ptr2len(s + i);
-        if (0 == cl)
+        ccl = utfc_ptr2len(s + i);
+        if (cl == 0)
             len = i;    // len must be wrong (shouldn't happen)
 
-        if (!utf_iscomposing(c)) {
-            if ((cn > 1 && !wide) || (cn <= 1 && wide)) {
-                // Changed from normal to wide or vice versa.
-                [backend drawString:(s+start) length:i-start
-                                   row:row column:startcol
-                                 cells:endcol-startcol
-                                 flags:(wide ? flags|DRAW_WIDE : flags)];
+        if (i > start && (cl < ccl || (cw > 1 && !wide) || (cw <= 1 && wide))) {
+            // Changed from normal to wide or vice versa.
+            [backend drawString:(s+start) length:i-start
+                            row:row column:startcol
+                          cells:endcol-startcol
+                          flags:flags|(wide ? DRAW_WIDE : 0)];
 
-                start = i;
-                startcol = endcol;
-            }
+            start = i;
+            startcol = endcol;
+        }
 
-            wide = cn > 1;
-            endcol += cn;
+        wide = cw > 1;
+        endcol += cw;
+
+        if (cl < ccl) {
+            // Changed from normal to wide or vice versa.
+            [backend drawString:(s+start) length:ccl
+                            row:row column:startcol
+                          cells:endcol-startcol
+                          flags:flags|DRAW_COMP|(wide ? DRAW_WIDE : 0)];
+
+            start = i + ccl;
+            startcol = endcol;
+            cl = ccl;
         }
     }
 
-    // Output remaining characters.
-    [backend drawString:(s+start) length:len-start
-                    row:row column:startcol cells:endcol-startcol
-                  flags:(wide ? flags|DRAW_WIDE : flags)];
+    if (len > start) {
+        // Output remaining characters.
+        [backend drawString:(s+start) length:len-start
+			row:row column:startcol
+		      cells:endcol-startcol
+		      flags:flags|(wide ? DRAW_WIDE : 0)];
+    }
 
-#ifdef FEAT_MBYTE
     if (conv_str)
         vim_free(conv_str);
-#endif
 
     return endcol - col;
+#else
+    [backend drawString:s length:len
+                    row:row column:col
+                  cells:len flags:flags];
+    return len;
+#endif
 }
 
 
@@ -1241,9 +1257,9 @@ gui_mch_start_blink(void)
  * Stop the cursor blinking.  Show the cursor if it wasn't shown.
  */
     void
-gui_mch_stop_blink(void)
+gui_mch_stop_blink(int may_call_gui_update_cursor)
 {
-    [[MMBackend sharedInstance] stopBlink];
+    [[MMBackend sharedInstance] stopBlink:may_call_gui_update_cursor];
 }
 
 
@@ -1278,7 +1294,16 @@ mch_set_mouse_shape(int shape)
 
 // -- Input Method ----------------------------------------------------------
 
-#if defined(USE_IM_CONTROL)
+#if defined(FEAT_MBYTE)
+# if defined(FEAT_EVAL)
+#  ifdef FEAT_GUI
+#   define USE_IMACTIVATEFUNC (!gui.in_use && *p_imaf != NUL)
+#   define USE_IMSTATUSFUNC (!gui.in_use && *p_imsf != NUL)
+#  else
+#   define USE_IMACTIVATEFUNC (*p_imaf != NUL)
+#   define USE_IMSTATUSFUNC (*p_imsf != NUL)
+#  endif
+# endif
 
     void
 im_set_position(int row, int col)
@@ -1301,6 +1326,17 @@ im_set_control(int enable)
     void
 im_set_active(int active)
 {
+#if defined(FEAT_EVAL)
+    if (USE_IMACTIVATEFUNC)
+    {
+        if (active != im_get_status())
+        {
+            call_imactivatefunc(active);
+        }
+        return;
+    }
+#endif
+
     // Tell frontend to enable/disable IM (called e.g. when the mode changes).
     if (!p_imdisable) {
         int msgid = active ? ActivateKeyScriptMsgID : DeactivateKeyScriptMsgID;
@@ -1313,10 +1349,15 @@ im_set_active(int active)
     int
 im_get_status(void)
 {
+# ifdef FEAT_EVAL
+    if (USE_IMSTATUSFUNC)
+        return call_imstatusfunc();
+# endif
+
     return [[MMBackend sharedInstance] imState];
 }
 
-#endif // defined(USE_IM_CONTROL)
+#endif // defined(FEAT_MBYTE)
 
 
 
@@ -1401,6 +1442,17 @@ ex_macaction(eap)
 gui_mch_adjust_charheight(void)
 {
     [[MMBackend sharedInstance] adjustLinespace:p_linespace];
+    return OK;
+}
+
+
+/*
+ * Adjust gui.char_width (after 'columnspace' was changed).
+ */
+    int
+gui_mch_adjust_charwidth(void)
+{
+    [[MMBackend sharedInstance] adjustColumnspace:p_columnspace];
     return OK;
 }
 
@@ -1609,6 +1661,13 @@ gui_mch_get_rgb(guicolor_T pixel)
 }
 
 
+    guicolor_T
+gui_mch_get_rgb_color(int r, int g, int b)
+{
+    return gui_get_rgb_color_cmn(r, g, b);
+}
+
+
 /*
  * Get the screen dimensions.
  * Allow 10 pixels for horizontal borders, 40 for vertical borders.
@@ -1804,7 +1863,8 @@ gui_macvim_add_to_find_pboard(char_u *pat)
     // The second entry will be used by other applications when taking entries
     // off the Find pasteboard, whereas MacVim will use the first if present.
     [pb setString:s forType:VimFindPboardType];
-    [pb setString:[s stringByRemovingFindPatterns] forType:NSStringPboardType];
+    if (MMShareFindPboard)
+        [pb setString:[s stringByRemovingFindPatterns] forType:NSStringPboardType];
 }
 
     void
@@ -1832,7 +1892,8 @@ gui_macvim_wait_for_startup()
         [backend waitForConnectionAcknowledgement];
 }
 
-void gui_macvim_get_window_layout(int *count, int *layout)
+    void
+gui_macvim_get_window_layout(int *count, int *layout)
 {
     if (!(count && layout)) return;
 
@@ -1846,12 +1907,14 @@ void gui_macvim_get_window_layout(int *count, int *layout)
     }
 }
 
-void *gui_macvim_new_autoreleasepool()
+    void *
+gui_macvim_new_autoreleasepool()
 {
     return (void *)[[NSAutoreleasePool alloc] init];
 }
 
-void gui_macvim_release_autoreleasepool(void *pool)
+    void
+gui_macvim_release_autoreleasepool(void *pool)
 {
     [(id)pool release];
 }
@@ -1897,7 +1960,7 @@ serverRegisterName(char_u *name)
  */
     int
 serverSendToVim(char_u *name, char_u *cmd, char_u **result,
-        int *port, int asExpr, int silent)
+        int *port, int asExpr, int timeout, int silent)
 {
 #ifdef FEAT_MBYTE
     name = CONVERT_TO_UTF8(name);
@@ -2177,7 +2240,8 @@ is_valid_macaction(char_u *action)
     return isValid;
 }
 
-static int specialKeyToNSKey(int key)
+    static int
+specialKeyToNSKey(int key)
 {
     if (!IS_SPECIAL(key))
         return key;
@@ -2242,7 +2306,8 @@ static int specialKeyToNSKey(int key)
     return 0;
 }
 
-static int vimModMaskToEventModifierFlags(int mods)
+    static int
+vimModMaskToEventModifierFlags(int mods)
 {
     int flags = 0;
 
@@ -2260,8 +2325,9 @@ static int vimModMaskToEventModifierFlags(int mods)
 
 
 
-// -- Channel Support ------------------------------------------------------
+// -- Job and Channel Support ------------------------------------------------------
 
+#if defined(FEAT_JOB_CHANNEL)
     void *
 gui_macvim_add_channel(channel_T *channel, ch_part_T part)
 {
@@ -2271,7 +2337,7 @@ gui_macvim_add_channel(channel_T *channel, ch_part_T part)
                                0,
                                dispatch_get_main_queue());
     dispatch_source_set_event_handler(s, ^{
-        channel_read(channel, part, "gui_macvim_add_channel");
+        channel_may_read(channel, part, "gui_macvim_add_channel");
     });
     dispatch_resume(s);
     return s;
@@ -2285,6 +2351,14 @@ gui_macvim_remove_channel(void *cookie)
     dispatch_release(s);
 }
 
+    void
+gui_macvim_cleanup_job_all(void)
+{
+    if (is_macos_high_sierra_or_later)
+	job_cleanup_all();
+}
+
+#endif // FEAT_JOB_CHANNEL
 
 
 // -- Graphical Sign Support ------------------------------------------------
@@ -2351,11 +2425,11 @@ gui_mch_destroy_sign(void *sign)
 #ifdef FEAT_BEVAL
 
     BalloonEval *
-gui_mch_create_beval_area(target, mesg, mesgCB, clientData)
-    void	*target;
-    char_u	*mesg;
-    void	(*mesgCB)(BalloonEval *, int);
-    void	*clientData;
+gui_mch_create_beval_area(
+    void	*target,
+    char_u	*mesg,
+    void	(*mesgCB)(BalloonEval *, int),
+    void	*clientData)
 {
     BalloonEval	*beval;
 
@@ -2371,8 +2445,7 @@ gui_mch_create_beval_area(target, mesg, mesgCB, clientData)
 }
 
     void
-gui_mch_enable_beval_area(beval)
-    BalloonEval	*beval;
+gui_mch_enable_beval_area(BalloonEval *beval)
 {
     // Set the balloon delay when enabling balloon eval.
     float delay = p_bdlay/1000.0f - MMBalloonEvalInternalDelay;
@@ -2383,8 +2456,7 @@ gui_mch_enable_beval_area(beval)
 }
 
     void
-gui_mch_disable_beval_area(beval)
-    BalloonEval	*beval;
+gui_mch_disable_beval_area(BalloonEval *beval)
 {
     // NOTE: An empty tool tip indicates that the tool tip window should hide.
     [[MMBackend sharedInstance] queueMessage:SetTooltipMsgID properties:
@@ -2395,9 +2467,7 @@ gui_mch_disable_beval_area(beval)
  * Show a balloon with "mesg".
  */
     void
-gui_mch_post_balloon(beval, mesg)
-    BalloonEval	*beval;
-    char_u	*mesg;
+gui_mch_post_balloon(BalloonEval *beval, char_u *mesg)
 {
     NSString *toolTip = [NSString stringWithVimString:mesg];
     [[MMBackend sharedInstance] setLastToolTip:toolTip];

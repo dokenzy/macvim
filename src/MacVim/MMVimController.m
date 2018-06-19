@@ -554,15 +554,9 @@ static BOOL isUnsafeMessage(int msgid);
 {
     if (OpenWindowMsgID == msgid) {
         [windowController openWindow];
-
-        // HACK: Delay actually presenting the window onscreen until after
-        // processing the queue since it contains drawing commands that need to
-        // be issued before presentation; otherwise the window may flash white
-        // just as it opens.
-        if (!isPreloading)
-            [windowController performSelector:@selector(presentWindow:)
-                                   withObject:nil
-                                   afterDelay:0];
+        if (!isPreloading) {
+            [windowController presentWindow:nil];
+        }
     } else if (BatchDrawMsgID == msgid) {
         [[[windowController vimView] textView] performBatchDrawWithData:data];
     } else if (SelectTabMsgID == msgid) {
@@ -762,6 +756,11 @@ static BOOL isUnsafeMessage(int msgid);
         int linespace = *((int*)bytes);
 
         [windowController adjustLinespace:linespace];
+    } else if (AdjustColumnspaceMsgID == msgid) {
+        const void *bytes = [data bytes];
+        int columnspace = *((int*)bytes);
+
+        [windowController adjustColumnspace:columnspace];
     } else if (ActivateMsgID == msgid) {
         [NSApp activateIgnoringOtherApps:YES];
         [[windowController window] makeKeyAndOrderFront:self];

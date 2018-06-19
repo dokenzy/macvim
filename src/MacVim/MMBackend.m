@@ -682,7 +682,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 
     // Only start the run loop if the input queue is empty, otherwise process
     // the input first so that the input on queue isn't delayed.
-    if ([inputQueue count] || input_available()) {
+    if ([inputQueue count] > 0 || input_available() || got_int) {
         inputReceived = YES;
     } else {
         // Wait for the specified amount of time, unless 'milliseconds' is
@@ -709,10 +709,11 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
             // processed we set the timeout to 0 and keep processing until the
             // run-loop times out.
             dt = 0.0;
-            inputReceived = YES;
+            if ([inputQueue count] > 0 || input_available() || got_int)
+                inputReceived = YES;
         }
 
-        if (input_available())
+        if ([inputQueue count] > 0 || input_available() || got_int)
             inputReceived = YES;
 
         [timer invalidate];
@@ -1078,9 +1079,9 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     }
 }
 
-- (void)stopBlink
+- (void)stopBlink:(BOOL)updateCursor
 {
-    if (MMBlinkStateOff == blinkState) {
+    if (MMBlinkStateOff == blinkState && updateCursor) {
         gui_update_cursor(TRUE, FALSE);
         [self flushQueue:YES];
     }
@@ -1093,6 +1094,13 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     NSMutableData *data = [NSMutableData data];
     [data appendBytes:&linespace length:sizeof(int)];
     [self queueMessage:AdjustLinespaceMsgID data:data];
+}
+
+- (void)adjustColumnspace:(int)columnspace
+{
+    NSMutableData *data = [NSMutableData data];
+    [data appendBytes:&columnspace length:sizeof(int)];
+    [self queueMessage:AdjustColumnspaceMsgID data:data];
 }
 
 - (void)activate
@@ -2677,7 +2685,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
                 if (mch_isdir(s)) {
                     mch_chdir((char*)s);
                 } else {
-                    vim_chdirfile(s);
+                    vim_chdirfile(s, "drop");
                 }
                 vim_free(s);
             }

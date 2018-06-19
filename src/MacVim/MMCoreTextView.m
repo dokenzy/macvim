@@ -42,7 +42,8 @@
 #define DRAW_UNDERC               0x08    /* draw undercurl text */
 #define DRAW_ITALIC               0x10    /* draw italic text */
 #define DRAW_CURSOR               0x20
-#define DRAW_WIDE                 0x40    /* draw wide text */
+#define DRAW_WIDE                 0x80    /* draw wide text */
+#define DRAW_COMP                 0x100   /* drawing composing char */
 
 #if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_8
 #define kCTFontOrientationDefault kCTFontDefaultOrientation
@@ -131,6 +132,10 @@ defaultAdvanceForFont(NSFont *font)
 {
     if (!(self = [super initWithFrame:frame]))
         return nil;
+
+    cgLayerEnabled = [[NSUserDefaults standardUserDefaults]
+            boolForKey:MMUseCGLayerAlwaysKey];
+    cgLayerLock = [NSLock new];
 
     // NOTE!  It does not matter which font is set here, Vim will set its
     // own font on startup anyway.  Just set some bogus values.
@@ -307,7 +312,7 @@ defaultAdvanceForFont(NSFont *font)
     // only render at integer sizes.  Hence, we restrict the cell width to
     // an integer here, otherwise the window width and the actual text
     // width will not match.
-    cellSize.width = ceil(em * cellWidthMultiplier);
+    cellSize.width = columnspace + ceil(em * cellWidthMultiplier);
     cellSize.height = linespace + defaultLineHeightForFont(font);
 
     fontDescent = ceil(CTFontGetDescent(fontRef));
@@ -366,6 +371,17 @@ defaultAdvanceForFont(NSFont *font)
     // linespace is non-zero the baseline will be adjusted as well; check
     // MMTypesetter.
     cellSize.height = linespace + defaultLineHeightForFont(font);
+}
+
+- (void)setColumnspace:(float)newColumnspace
+{
+    columnspace = newColumnspace;
+
+    double em = round(defaultAdvanceForFont(font));
+    float cellWidthMultiplier = [[NSUserDefaults standardUserDefaults]
+            floatForKey:MMCellWidthMultiplierKey];
+
+    cellSize.width = columnspace + ceil(em * cellWidthMultiplier);
 }
 
 
@@ -429,6 +445,14 @@ defaultAdvanceForFont(NSFont *font)
     // other side-effects, but we really _do_ want to process all key down
     // events so it seems safe to always return YES.
     return YES;
+}
+
+- (void)setFrameSize:(NSSize)newSize {
+    if (!drawPending && !NSEqualSizes(newSize, self.frame.size) && drawData.count == 0) {
+        [NSAnimationContext beginGrouping];
+        drawPending = YES;
+    }
+    [super setFrameSize:newSize];
 }
 
 - (void)keyDown:(NSEvent *)event
@@ -586,18 +610,12 @@ defaultAdvanceForFont(NSFont *font)
     NSGraphicsContext *context = [NSGraphicsContext currentContext];
     [context setShouldAntialias:antialias];
 
-    id data;
-    NSEnumerator *e = [drawData objectEnumerator];
-    while ((data = [e nextObject]))
-        [self batchDrawData:data];
-
-    [drawData removeAllObjects];
-
-    if (cgLayerEnabled) {
+    if (cgLayerEnabled && drawData.count == 0) {
         // during a live resize, we will have around a stale layer until the
         // refresh messages travel back from the vim process. We push the old
         // layer in at an offset to get rid of jitter due to lines changing
         // position.
+        [cgLayerLock lock];
         CGLayerRef l = [self getCGLayer];
         CGSize cgLayerSize = CGLayerGetSize(l);
         CGSize frameSize = [self frame].size;
@@ -608,22 +626,44 @@ defaultAdvanceForFont(NSFont *font)
                 cgLayerSize.height);
 
         CGContextRef cgContext = [context graphicsPort];
-        CGContextSaveGState(cgContext);
-        CGContextSetBlendMode(cgContext, kCGBlendModeCopy);
-        CGContextDrawLayerInRect(cgContext, drawRect, l);
-        CGContextRestoreGState(cgContext);
+
+        const NSRect *rects;
+        long count;
+        [self getRectsBeingDrawn:&rects count:&count];
+
+        int i;
+        for (i = 0; i < count; i++) {
+           CGContextSaveGState(cgContext);
+           CGContextClipToRect(cgContext, rects[i]);
+           CGContextSetBlendMode(cgContext, kCGBlendModeCopy);
+           CGContextDrawLayerInRect(cgContext, drawRect, l);
+           CGContextRestoreGState(cgContext);
+        }
+        [cgLayerLock unlock];
+    } else {
+       id data;
+       NSEnumerator *e = [drawData objectEnumerator];
+       while ((data = [e nextObject]))
+          [self batchDrawData:data];
+
+       [drawData removeAllObjects];
     }
 }
 
 - (void)performBatchDrawWithData:(NSData *)data
 {
-    [drawData addObject:data];
-    [self setNeedsDisplay:YES];
-
-    // NOTE: During resizing, Cocoa only sends draw messages before Vim's rows
-    // and columns are changed (due to ipc delays). Force a redraw here.
-    if ([self inLiveResize])
-        [self display];
+    if (cgLayerEnabled && drawData.count == 0 && [self getCGContext]) {
+        [cgLayerLock lock];
+        [self batchDrawData:data];
+        [cgLayerLock unlock];
+    } else {
+        [drawData addObject:data];
+        [self setNeedsDisplay:YES];
+    }
+    if (drawPending) {
+        [NSAnimationContext endGrouping];
+        drawPending = NO;
+    }
 }
 
 - (void)setCGLayerEnabled:(BOOL)enabled
@@ -646,11 +686,12 @@ defaultAdvanceForFont(NSFont *font)
 - (CGLayerRef)getCGLayer
 {
     NSParameterAssert(cgLayerEnabled);
-    if (!cgLayer) {
+    if (!cgLayer && [self lockFocusIfCanDraw]) {
         NSGraphicsContext *context = [NSGraphicsContext currentContext];
         NSRect frame = [self frame];
         cgLayer = CGLayerCreateWithContext(
             [context graphicsPort], frame.size, NULL);
+        [self unlockFocus];
     }
     return cgLayer;
 }
@@ -664,6 +705,18 @@ defaultAdvanceForFont(NSFont *font)
     } else {
         return [[NSGraphicsContext currentContext] graphicsPort];
     }
+}
+
+- (void)setNeedsDisplayCGLayerInRect:(CGRect)rect
+{
+    if (cgLayerEnabled)
+       [self setNeedsDisplayInRect:rect];
+}
+
+- (void)setNeedsDisplayCGLayer:(BOOL)flag
+{
+    if (cgLayerEnabled)
+       [self setNeedsDisplay:flag];
 }
 
 
@@ -982,6 +1035,7 @@ defaultAdvanceForFont(NSFont *font)
                           operation:NSCompositingOperationSourceOver
                            fraction:1.0];
             }
+            [self setNeedsDisplayCGLayerInRect:r];
         } else if (DrawStringDrawType == type) {
             int bg = *((int*)bytes);  bytes += sizeof(int);
             int fg = *((int*)bytes);  bytes += sizeof(int);
@@ -1128,7 +1182,7 @@ attributedStringForString(NSString *string, const CTFontRef font,
                             // 2 - full ligatures including rare
                             // 1 - basic ligatures
                             // 0 - no ligatures
-                            [NSNumber numberWithInteger:(useLigatures ? 1 : 0)],
+                            [NSNumber numberWithBool:useLigatures],
                             kCTLigatureAttributeName,
                             nil
     ];
@@ -1139,7 +1193,7 @@ attributedStringForString(NSString *string, const CTFontRef font,
 
     static UniCharCount
 fetchGlyphsAndAdvances(const CTLineRef line, CGGlyph *glyphs, CGSize *advances,
-                       UniCharCount length)
+                       CGPoint *positions, UniCharCount length)
 {
     NSArray *glyphRuns = (NSArray*)CTLineGetGlyphRuns(line);
 
@@ -1158,6 +1212,8 @@ fetchGlyphsAndAdvances(const CTLineRef line, CGGlyph *glyphs, CGSize *advances,
             CTRunGetGlyphs(run, range, &glyphs[offset]);
         if (advances != NULL)
             CTRunGetAdvances(run, range, &advances[offset]);
+        if (positions != NULL)
+            CTRunGetPositions(run, range, &positions[offset]);
 
         offset += count;
         if (offset >= length)
@@ -1184,78 +1240,28 @@ gatherGlyphs(CGGlyph glyphs[], UniCharCount count)
 }
 
     static UniCharCount
-ligatureGlyphsForChars(const unichar *chars, CGGlyph *glyphs,
-                       CGPoint *positions, UniCharCount length, CTFontRef font)
+composeGlyphsForChars(const unichar *chars, CGGlyph *glyphs,
+                      CGPoint *positions, UniCharCount length, CTFontRef font,
+                      BOOL isComposing, BOOL useLigatures)
 {
-    // CoreText has no simple wait of retrieving a ligature for a set of
-    // UniChars. The way proposed on the CoreText ML is to convert the text to
-    // an attributed string, create a CTLine from it and retrieve the Glyphs
-    // from the CTRuns in it.
-    CGGlyph refGlyphs[length];
-    CGPoint refPositions[length];
-
-    memcpy(refGlyphs, glyphs, sizeof(CGGlyph) * length);
-    memcpy(refPositions, positions, sizeof(CGSize) * length);
-
     memset(glyphs, 0, sizeof(CGGlyph) * length);
 
     NSString *plainText = [NSString stringWithCharacters:chars length:length];
-    CFAttributedStringRef ligatureText = attributedStringForString(plainText,
-                                                                   font, YES);
+    CFAttributedStringRef composedText = attributedStringForString(plainText,
+                                                                   font,
+                                                                   useLigatures);
 
-    CTLineRef ligature = CTLineCreateWithAttributedString(ligatureText);
+    CTLineRef line = CTLineCreateWithAttributedString(composedText);
 
-    CGSize ligatureRanges[length], regularRanges[length];
+    // get the (composing)glyphs and advances for the new text
+    UniCharCount offset = fetchGlyphsAndAdvances(line, glyphs, NULL,
+                                                 isComposing ? positions : NULL,
+                                                 length);
 
-    // get the (ligature)glyphs and advances for the new text
-    UniCharCount offset = fetchGlyphsAndAdvances(ligature, glyphs,
-                                                 ligatureRanges, length);
-    // fetch the advances for the base text
-    CTFontGetAdvancesForGlyphs(font, kCTFontOrientationDefault, refGlyphs,
-                               regularRanges, length);
+    CFRelease(composedText);
+    CFRelease(line);
 
-    CFRelease(ligatureText);
-    CFRelease(ligature);
-
-    // tricky part: compare both advance ranges and chomp positions which are
-    // covered by a single ligature while keeping glyphs not in the ligature
-    // font.
-#define fequal(a, b) (fabs((a) - (b)) < FLT_EPSILON)
-#define fless(a, b)((a) - (b) < FLT_EPSILON) && (fabs((a) - (b)) > FLT_EPSILON)
-
-    CFIndex skip = 0;
-    CFIndex i;
-    for (i = 0; i < offset && skip + i < length; ++i) {
-        memcpy(&positions[i], &refPositions[skip + i], sizeof(CGSize));
-
-        if (fequal(ligatureRanges[i].width, regularRanges[skip + i].width)) {
-            // [mostly] same width
-            continue;
-        } else if (fless(ligatureRanges[i].width,
-                         regularRanges[skip + i].width)) {
-            // original is wider than our result - use the original glyph
-            // FIXME: this is currently the only way to detect emoji (except
-            // for 'glyph[i] == 5')
-            glyphs[i] = refGlyphs[skip + i];
-            continue;
-        }
-
-        // no, that's a ligature
-        // count how many positions this glyph would take up in the base text
-        CFIndex j = 0;
-        float width = ceil(regularRanges[skip + i].width);
-
-        while ((int)width < (int)ligatureRanges[i].width
-                && skip + i + j < length) {
-            width += ceil(regularRanges[++j + skip + i].width);
-        }
-        skip += j;
-    }
-
-#undef fless
-#undef fequal
-
-    // as ligatures combine characters it is required to adjust the
+    // as ligatures composing characters it is required to adjust the
     // original length value
     return offset;
 }
@@ -1263,18 +1269,12 @@ ligatureGlyphsForChars(const unichar *chars, CGGlyph *glyphs,
     static void
 recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
             UniCharCount length, CGContextRef context, CTFontRef fontRef,
-            NSMutableArray *fontCache, BOOL useLigatures)
+            NSMutableArray *fontCache, BOOL isComposing, BOOL useLigatures)
 {
     if (CTFontGetGlyphsForCharacters(fontRef, chars, glyphs, length)) {
         // All chars were mapped to glyphs, so draw all at once and return.
-        if (useLigatures) {
-            length = ligatureGlyphsForChars(chars, glyphs, positions, length,
-                                            fontRef);
-        } else {
-            // only fixup surrogate pairs if we're not using ligatures
-            length = gatherGlyphs(glyphs, length);
-        }
-
+        length = composeGlyphsForChars(chars, glyphs, positions, length,
+                                       fontRef, isComposing, useLigatures);
         CTFontDrawGlyphs(fontRef, glyphs, positions, length, context);
         return;
     }
@@ -1335,7 +1335,7 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
                 return;
 
             recurseDraw(chars, glyphs, positions, attemptedCount, context,
-                        fallback, fontCache, useLigatures);
+                        fallback, fontCache, isComposing, useLigatures);
 
             // If only a portion of the invalid range was rendered above,
             // the remaining range needs to be attempted by subsequent
@@ -1369,8 +1369,10 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
     float x = col*cellSize.width + insetSize.width;
     float y = frame.size.height - insetSize.height - (1+row)*cellSize.height;
     float w = cellSize.width;
+    BOOL wide = flags & DRAW_WIDE ? YES : NO;
+    BOOL composing = flags & DRAW_COMP ? YES : NO;
 
-    if (flags & DRAW_WIDE) {
+    if (wide) {
         // NOTE: It is assumed that either all characters in 'chars' are wide
         // or all are normal width.
         w *= 2;
@@ -1429,14 +1431,14 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
         }
 
         CGContextSetRGBStrokeColor(context, RED(sp), GREEN(sp), BLUE(sp),
-                                 ALPHA(sp));
+                                   ALPHA(sp));
         CGContextStrokePath(context);
     }
 
     if (length > maxlen) {
         if (glyphs) free(glyphs);
         if (positions) free(positions);
-        glyphs = (CGGlyph*)malloc(length*sizeof(CGGlyph));
+        glyphs = (CGGlyph*)calloc(length, sizeof(CGGlyph));
         positions = (CGPoint*)calloc(length, sizeof(CGPoint));
         maxlen = length;
     }
@@ -1447,15 +1449,14 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
     CGContextSetFontSize(context, [font pointSize]);
 
     // Calculate position of each glyph relative to (x,y).
-    NSUInteger i;
-    float xrel = 0;
-    for (i = 0; i < length; ++i) {
-        positions[i].x = xrel;
-        xrel += w;
+    float xrel = composing ? .0 : w;
+    for (unsigned i = 0; i < length; ++i) {
+        positions[i].x = i * xrel;
+        positions[i].y = .0;
     }
 
-    CTFontRef fontRef = (CTFontRef)(flags & DRAW_WIDE ? [fontWide retain]
-                                                      : [font retain]);
+    CTFontRef fontRef = (CTFontRef)(wide ? [fontWide retain]
+                                         : [font retain]);
     unsigned traits = 0;
     if (flags & DRAW_ITALIC)
         traits |= kCTFontItalicTrait;
@@ -1464,7 +1465,7 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
 
     if (traits) {
         CTFontRef fr = CTFontCreateCopyWithSymbolicTraits(fontRef, 0.0, NULL,
-                traits, traits);
+                                                          traits, traits);
         if (fr) {
             CFRelease(fontRef);
             fontRef = fr;
@@ -1472,12 +1473,15 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
     }
 
     CGContextSetTextPosition(context, x, y+fontDescent);
-    recurseDraw(chars, glyphs, positions, length, context, fontRef, fontCache, ligatures);
+    recurseDraw(chars, glyphs, positions, length, context, fontRef, fontCache,
+                composing, ligatures);
 
     CFRelease(fontRef);
     if (thinStrokes)
         CGContextSetFontSmoothingStyle(context, originalFontSmoothingStyle);
     CGContextRestoreGState(context);
+
+    [self setNeedsDisplayCGLayerInRect:clipRect];
 }
 
 - (void)scrollRect:(NSRect)rect lineCount:(int)count
@@ -1495,6 +1499,7 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
         CGContextDrawLayerAtPoint(
                 context, CGPointMake(0, -yOffset), [self getCGLayer]);
         CGContextRestoreGState(context);
+        [self setNeedsDisplayCGLayerInRect:clipRect];
     } else {
         NSSize delta={0, -count * cellSize.height};
         [self scrollRect:rect by:delta];
@@ -1549,6 +1554,7 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
     CGContextSetBlendMode(context, kCGBlendModeCopy);
     CGContextFillRect(context, *(CGRect*)&rect);
     CGContextSetBlendMode(context, kCGBlendModeNormal);
+    [self setNeedsDisplayCGLayerInRect:rect];
 }
 
 - (void)clearAll
@@ -1565,6 +1571,8 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
     CGContextSetRGBFillColor(context, r, g, b, a);
     CGContextFillRect(context, *(CGRect*)&rect);
     CGContextSetBlendMode(context, kCGBlendModeNormal);
+
+    [self setNeedsDisplayCGLayer:YES];
 }
 
 - (void)drawInsertionPointAtRow:(int)row column:(int)col shape:(int)shape
@@ -1612,6 +1620,7 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
         CGContextFillRect(context, *(CGRect*)&rect);
     }
 
+    [self setNeedsDisplayCGLayerInRect:rect];
     CGContextRestoreGState(context);
 }
 
@@ -1628,6 +1637,7 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
                         numColumns:ncols];
     CGContextFillRect(cgctx, *(CGRect*)&rect);
 
+    [self setNeedsDisplayCGLayerInRect:rect];
     CGContextRestoreGState(cgctx);
 }
 

@@ -207,7 +207,7 @@ set_context_in_cscope_cmd(
     static void
 do_cscope_general(
     exarg_T	*eap,
-    int		make_split) /* whether to split window */
+    int		make_split UNUSED) /* whether to split window */
 {
     cscmd_T *cmdp;
 
@@ -217,7 +217,6 @@ do_cscope_general(
 	return;
     }
 
-#ifdef FEAT_WINDOWS
     if (make_split)
     {
 	if (!cmdp->cansplit)
@@ -229,14 +228,11 @@ do_cscope_general(
 	postponed_split_flags = cmdmod.split;
 	postponed_split_tab = cmdmod.tab;
     }
-#endif
 
     cmdp->func(eap);
 
-#ifdef FEAT_WINDOWS
     postponed_split_flags = 0;
     postponed_split_tab = 0;
-#endif
 }
 
 /*
@@ -326,7 +322,7 @@ ex_cstag(exarg_T *eap)
     if (!ret)
     {
 	(void)EMSG(_("E257: cstag: tag not found"));
-#if defined(FEAT_WINDOWS) && defined(FEAT_QUICKFIX)
+#if defined(FEAT_QUICKFIX)
 	g_do_tagpreview = 0;
 #endif
     }
@@ -615,7 +611,7 @@ staterr:
 	if (p_csverbose)
 	{
 	    msg_clr_eos();
-	    (void)smsg_attr(hl_attr(HLF_R),
+	    (void)smsg_attr(HL_ATTR(HLF_R),
 			    (char_u *)_("Added cscope database %s"),
 			    csinfo[i].fname);
 	}
@@ -681,7 +677,7 @@ cs_cnt_matches(int idx)
 {
     char *stok;
     char *buf;
-    int nlines;
+    int nlines = 0;
 
     buf = (char *)alloc(CSREAD_BUFSIZE);
     if (buf == NULL)
@@ -704,7 +700,10 @@ cs_cnt_matches(int idx)
 	 * cscope will output error messages before the number-of-lines output.
 	 * Display/discard any output that doesn't match what we want.
 	 * Accept "\S*cscope: X lines", also matches "mlcscope".
+	 * Bail out for the "Unable to search" error.
 	 */
+	if (strstr((const char *)buf, "Unable to search database") != NULL)
+	    break;
 	if ((stok = strtok(buf, (const char *)" ")) == NULL)
 	    continue;
 	if (strstr((const char *)stok, "cscope:") == NULL)
@@ -781,7 +780,7 @@ cs_create_cmd(char *csoption, char *pattern)
      * they may want to use the leading white space. */
     pat = pattern;
     if (search != 4 && search != 6)
-	while vim_iswhite(*pat)
+	while VIM_ISWHITE(*pat)
 	    ++pat;
 
     if ((cmd = (char *)alloc((unsigned)(strlen(pat) + 2))) == NULL)
@@ -1148,17 +1147,15 @@ cs_find_common(
 	    return FALSE;
 	}
 
-# ifdef FEAT_AUTOCMD
 	if (*qfpos != '0'
 		&& apply_autocmds(EVENT_QUICKFIXCMDPRE, (char_u *)"cscope",
 					       curbuf->b_fname, TRUE, curbuf))
 	{
-#  ifdef FEAT_EVAL
+# ifdef FEAT_EVAL
 	    if (aborting())
 		return FALSE;
-#  endif
-	}
 # endif
+	}
     }
 #endif
 
@@ -1242,9 +1239,8 @@ cs_find_common(
 		wp = curwin;
 	    /* '-' starts a new error list */
 	    if (qf_init(wp, tmp, (char_u *)"%f%*\\t%l%*\\t%m",
-						  *qfpos == '-', cmdline) > 0)
+					  *qfpos == '-', cmdline, NULL) > 0)
 	    {
-# ifdef FEAT_WINDOWS
 		if (postponed_split != 0)
 		{
 		    (void)win_split(postponed_split > 0 ? postponed_split : 0,
@@ -1252,12 +1248,9 @@ cs_find_common(
 		    RESET_BINDING(curwin);
 		    postponed_split = 0;
 		}
-# endif
 
-# ifdef FEAT_AUTOCMD
 		apply_autocmds(EVENT_QUICKFIXCMDPOST, (char_u *)"cscope",
 					       curbuf->b_fname, TRUE, curbuf);
-# endif
 		if (use_ll)
 		    /*
 		     * In the location list window, use the displayed location
@@ -1482,8 +1475,7 @@ cs_insert_filelist(
     {
 	if ((csinfo[i].ppath = (char *)alloc((unsigned)strlen(ppath) + 1)) == NULL)
 	{
-	    vim_free(csinfo[i].fname);
-	    csinfo[i].fname = NULL;
+	    VIM_CLEAR(csinfo[i].fname);
 	    return -1;
 	}
 	(void)strcpy(csinfo[i].ppath, (const char *)ppath);
@@ -1494,10 +1486,8 @@ cs_insert_filelist(
     {
 	if ((csinfo[i].flags = (char *)alloc((unsigned)strlen(flags) + 1)) == NULL)
 	{
-	    vim_free(csinfo[i].fname);
-	    vim_free(csinfo[i].ppath);
-	    csinfo[i].fname = NULL;
-	    csinfo[i].ppath = NULL;
+	    VIM_CLEAR(csinfo[i].fname);
+	    VIM_CLEAR(csinfo[i].ppath);
 	    return -1;
 	}
 	(void)strcpy(csinfo[i].flags, (const char *)flags);
@@ -1612,7 +1602,7 @@ cs_kill_execute(
     if (p_csverbose)
     {
 	msg_clr_eos();
-	(void)smsg_attr(hl_attr(HLF_R) | MSG_HIST,
+	(void)smsg_attr(HL_ATTR(HLF_R) | MSG_HIST,
 		(char_u *)_("cscope connection %s closed"), cname);
     }
     cs_release_csp(i, TRUE);
@@ -1942,10 +1932,8 @@ parse_out:
     if (totsofar == 0)
     {
 	/* No matches, free the arrays and return NULL in "*matches_p". */
-	vim_free(matches);
-	matches = NULL;
-	vim_free(cntxts);
-	cntxts = NULL;
+	VIM_CLEAR(matches);
+	VIM_CLEAR(cntxts);
     }
     *matched = totsofar;
     *matches_p = matches;
@@ -2001,7 +1989,7 @@ cs_print_tags_priv(char **matches, char **cntxts, int num_matches)
     char	*cstag_msg = _("Cscope tag: %s");
     char	*csfmt_str = "%4d %6s  ";
 
-    assert (num_matches > 0);
+    assert(num_matches > 0);
 
     if ((tbuf = (char *)alloc((unsigned)strlen(matches[0]) + 1)) == NULL)
 	return;
@@ -2020,14 +2008,14 @@ cs_print_tags_priv(char **matches, char **cntxts, int num_matches)
     {
 	bufsize = newsize;
 	(void)sprintf(buf, cstag_msg, ptag);
-	MSG_PUTS_ATTR(buf, hl_attr(HLF_T));
+	MSG_PUTS_ATTR(buf, HL_ATTR(HLF_T));
     }
 
     vim_free(tbuf);
 
-    MSG_PUTS_ATTR(_("\n   #   line"), hl_attr(HLF_T));    /* strlen is 7 */
+    MSG_PUTS_ATTR(_("\n   #   line"), HL_ATTR(HLF_T));    /* strlen is 7 */
     msg_advance(msg_col + 2);
-    MSG_PUTS_ATTR(_("filename / context / line\n"), hl_attr(HLF_T));
+    MSG_PUTS_ATTR(_("filename / context / line\n"), HL_ATTR(HLF_T));
 
     num = 1;
     for (i = 0; i < num_matches; i++)
@@ -2071,9 +2059,9 @@ cs_print_tags_priv(char **matches, char **cntxts, int num_matches)
 	{
 	    /* csfmt_str = "%4d %6s  "; */
 	    (void)sprintf(buf, csfmt_str, num, lno);
-	    MSG_PUTS_ATTR(buf, hl_attr(HLF_CM));
+	    MSG_PUTS_ATTR(buf, HL_ATTR(HLF_CM));
 	}
-	MSG_PUTS_LONG_ATTR(cs_pathcomponents(fname), hl_attr(HLF_CM));
+	MSG_PUTS_LONG_ATTR(cs_pathcomponents(fname), HL_ATTR(HLF_CM));
 
 	/* compute the required space for the context */
 	if (cntxts[idx] != NULL)
@@ -2399,7 +2387,7 @@ cs_reset(exarg_T *eap UNUSED)
 		 * "Added cscope database..."
 		 */
 		sprintf(buf, " (#%d)", i);
-		MSG_PUTS_ATTR(buf, hl_attr(HLF_R));
+		MSG_PUTS_ATTR(buf, HL_ATTR(HLF_R));
 	    }
 	}
 	vim_free(dblist[i]);
@@ -2411,7 +2399,7 @@ cs_reset(exarg_T *eap UNUSED)
     vim_free(fllist);
 
     if (p_csverbose)
-	MSG_ATTR(_("All cscope databases reset"), hl_attr(HLF_R) | MSG_HIST);
+	MSG_ATTR(_("All cscope databases reset"), HL_ATTR(HLF_R) | MSG_HIST);
     return CSCOPE_SUCCESS;
 } /* cs_reset */
 
@@ -2448,7 +2436,7 @@ cs_resolve_file(int i, char *name)
 	if (csdir != NULL)
 	{
 	    vim_strncpy(csdir, (char_u *)csinfo[i].fname,
-		                       gettail((char_u *)csinfo[i].fname)
+					  gettail((char_u *)csinfo[i].fname)
 						 - (char_u *)csinfo[i].fname);
 	    len += (int)STRLEN(csdir);
 	}
@@ -2497,7 +2485,7 @@ cs_show(exarg_T *eap UNUSED)
     {
 	MSG_PUTS_ATTR(
 	    _(" # pid    database name                       prepend path\n"),
-	    hl_attr(HLF_T));
+	    HL_ATTR(HLF_T));
 	for (i = 0; i < csinfo_size; i++)
 	{
 	    if (csinfo[i].fname == NULL)
