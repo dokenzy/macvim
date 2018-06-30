@@ -26,6 +26,25 @@ then,
 1. Select an item in `Command Line Tools`
 
 
-
 ## Run
 `cd MacVim/build/Release/MacVim.app`
+### run in terminal
+1. run
+   ```
+   ln -s /Applications/MacVim.app/Contents/bin/mvim /usr/local/bin/mvim
+   ```
+1. set alias in your shell rc file like `~/.zshrc`:
+    ```
+    alias vi="/usr/local/bin/mvim"
+    ```
+
+reference https://github.com/macvim-dev/macvim/wiki/FAQ
+
+
+## VIMRC
+- example: https://github.com/dokenzy/vimrc
+### font
+To use webdevicon with airline-powerline, set like this:
+```set guifont=Roboto\ Mono\ Light\ Nerd\ Font\ Complete\ Mono:h13```
+
+this requires customized font. Download and install you want: https://github.com/dokenzy/nerd-fonts
